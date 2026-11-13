@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="将自己的模型 API、Codex 与 Ollama 统一接入项目。">
+  <title>Model Dock · 模型接入与管理</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div id="app"><div class="loading">正在连接本机网关…</div></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+  <noscript>请启用 JavaScript 以使用模型管理台。推理 API 可直接通过 HTTP 访问。</noscript>
+  <script type="module" src="/assets/app.mjs"></script>
+</body>
+</html>

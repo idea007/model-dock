@@ -1,0 +1,18 @@
+Model Dock
+Copyright (c) 2026 Model Dock contributors
+
+The Codex JSON-RPC transport, application-function handoff, and local provider
+discovery design were extracted and adapted from the project owner's Cursor
+Blinking implementation, in particular:
+
+  runtimes/local-connector/providers/codex/
+  runtimes/local-connector/providers/ollama/
+  runtimes/platform-ai-sidecars/codex-bridge/
+
+The gateway, persistence, public protocol and framework-independent console are
+maintained in this repository. No blog account database, private configuration,
+frontend template, model weights or third-party runtime binaries are distributed.
+
+Codex, Ollama and model/provider names identify separate third-party products.
+Their licenses, account conditions and service policies apply independently.
+This project is not endorsed by those providers.

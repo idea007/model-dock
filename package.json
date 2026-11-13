@@ -1,0 +1,47 @@
+{
+  "name": "lab-model-dock",
+  "version": "0.1.0",
+  "description": "A local-first AI gateway for your APIs, Ollama and Codex, with model management.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/idea007/model-dock.git"
+  },
+  "homepage": "https://github.com/idea007/model-dock#readme",
+  "bugs": {
+    "url": "https://github.com/idea007/model-dock/issues"
+  },
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "bin": {
+    "model-dock": "apps/gateway/cli.mjs"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "files": [
+    "apps/",
+    "packages/",
+    "examples/",
+    "docs/",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "start": "node apps/gateway/cli.mjs serve",
+    "dev": "node apps/gateway/cli.mjs serve",
+    "token": "node apps/gateway/cli.mjs token",
+    "check": "node scripts/check.mjs",
+    "test": "node --test",
+    "verify": "npm run check && npm test",
+    "pack:check": "node scripts/pack-smoke.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "27.4.0",
+    "openai": "7.56.0"
+  }
+}
