@@ -1,12 +1,14 @@
 # Model Dock
 
-**Your models. Connected.** 本地优先的 AI 网关与模型管理台。
+**English** | [简体中文](README.zh-CN.md)
 
-把自己的模型 API、Ollama 和已登录的 Codex CLI 接入同一个地址，让应用通过模型 ID 或功能别名调用。网关与管理台无需运行时第三方依赖；核心、协议和适配器放在同一仓库中维护。
+**Your models. Connected.** A local-first AI gateway and model management console.
 
-## 快速开始
+Connect your own model APIs, Ollama, and a signed-in Codex CLI through a single endpoint. Apps can call a model by its ID or an alias. The gateway and console have no third-party runtime dependencies; the core, protocols, and provider adapters are maintained in this repository.
 
-需要 **Node.js 22.12+**，推荐 Node.js 24 LTS。
+## Quick start
+
+Requires **Node.js 22.12+**. Node.js 24 LTS is recommended.
 
 ```sh
 git clone https://github.com/idea007/model-dock.git
@@ -15,27 +17,29 @@ npm ci
 npm start -- --open
 ```
 
-管理台默认位于 **http://127.0.0.1:4317**，API Base URL 为 **http://127.0.0.1:4317/v1**。
+The console runs at **http://127.0.0.1:4317** by default. The API base URL is **http://127.0.0.1:4317/v1**.
 
-`--open` 会在默认浏览器中打开已认证的本机管理页。如果只运行 `npm start`，在另一个终端运行 `npm run token` 获取管理令牌并登录。网关只有本机监听，不依赖托管平台或博客项目。
+`--open` opens an authenticated local console page in your default browser. If you start with `npm start` alone, run `npm run token` in another terminal to retrieve the administrator token and sign in. The gateway listens only on loopback and does not depend on a hosted platform or the original blog project.
 
-1. 在「连接与凭证」添加一个模型来源，点击「发现模型」。
-2. 在「功能与模型」启用需要的模型；新发现的模型默认关闭。
-3. 可选：添加 `chat-default`、`summarize` 等功能别名，绑定具体模型。
-4. 在「项目访问」为 demo 创建密钥，并选择允许使用的模型或功能。
-5. 在「调用测试」验证真实请求，再把网关地址、项目密钥和模型 ID/别名填入应用。
+The console currently uses Chinese labels:
 
-没有任何模型账号时，也可以运行 `node examples/mock-server.mjs`，按终端提示添加一个明确标记的测试上游。它返回固定测试内容，不调用真实模型。
+1. Add a provider under **Connections & credentials** (`连接与凭证`), then click **Discover models** (`发现模型`).
+2. Enable the models you need under **Functions & models** (`功能与模型`). Newly discovered models are disabled by default.
+3. Optionally, add aliases such as `chat-default` or `summarize` and bind them to specific models.
+4. Create a key for your demo under **Project access** (`项目访问`) and select the models or aliases it may use.
+5. Verify a request in the **Playground** (`调用测试`), then configure your app with the gateway URL, project key, and model ID or alias.
 
-## 接入自己的项目
+To try the gateway without a model account, run `node examples/mock-server.mjs` and follow its terminal instructions to add a clearly labeled test upstream. It returns fixed test content without calling a real model.
+
+## Connect your app
 
 ```sh
-export MODEL_DOCK_API_KEY='从管理台创建的项目密钥'
+export MODEL_DOCK_API_KEY='your-project-key-from-the-console'
 export MODEL_DOCK_MODEL='chat-default'
 node examples/chat.mjs
 ```
 
-不依赖特定 SDK；任何能使用本项目兼容范围内 Chat Completions 协议的客户端都可以接入。
+No particular SDK is required. Any client that uses the supported subset of the Chat Completions protocol can connect.
 
 ```js
 import OpenAI from 'openai';
@@ -46,94 +50,94 @@ const client = new OpenAI({
 });
 const result = await client.chat.completions.create({
   model: 'chat-default',
-  messages: [{ role: 'user', content: '你好' }],
+  messages: [{ role: 'user', content: 'Hello' }],
 });
 console.log(result.choices[0].message.content);
 ```
 
-[原生 JavaScript 示例](examples/chat.mjs)、[Python SDK 示例](examples/chat.py)、[应用工具调用示例](examples/tools.mjs)。示例密钥应放在应用服务端环境变量中，不放在公开网页脚本中。
+See the [plain JavaScript example](examples/chat.mjs), [Python SDK example](examples/chat.py), and [application tool-calling example](examples/tools.mjs). Keep project keys in your application's server-side environment variables, not in public browser scripts.
 
-## 三种模型来源
+## Three model sources
 
-| 来源 | 连接方式 | 管理能力 |
+| Source | Connection | Capabilities |
 | --- | --- | --- |
-| 自有 API | OpenAI-compatible Base URL + API Key | 多连接、发现或手动添加模型、启停、功能别名、项目授权 |
-| Ollama | 本机原生 HTTP API | 已安装模型发现、能力与上下文元数据、文本推理、流式、JSON、模型支持的工具调用 |
-| Codex（实验性） | 本机已安装并登录的 CLI / App Server | 模型目录、推理等级、文本、流式、JSON、应用工具调用与取消 |
+| Your own API | OpenAI-compatible base URL + API key | Multiple connections, model discovery or manual registration, enable/disable controls, aliases, and project access scopes |
+| Ollama | Native local HTTP API | Installed-model discovery, capability and context metadata, text inference, streaming, JSON, and model-supported tool calls |
+| Codex (experimental) | Locally installed and signed-in CLI / App Server | Model catalog, reasoning effort levels, text, streaming, JSON, application tool calls, and cancellation |
 
-Ollama 需另行安装、启动并下载模型，例如 `ollama pull <model>`。本项目不会在启动或检查状态时自动下载权重。上下文元数据用于展示，推理不会擅自把 `num_ctx` 调到模型最大值。
+Install and start Ollama separately, then download a model with a command such as `ollama pull <model>`. Model Dock does not download weights at startup or during status checks. Context metadata is displayed for reference; inference does not automatically raise `num_ctx` to the model's maximum.
 
-Codex 使用原生 JSON-RPC，按请求创建临时线程；Shell、浏览器、插件、宿主 MCP 等能力被隔离。应用工具调用会返回调用方执行，网关不会替应用执行工具。它是真实模型桥接，使用 Codex 配置的账号/上游及对应额度；`model/list` 只是目录，不能证明当前账号有某个模型的推理权限。
+Codex uses native JSON-RPC and creates a temporary thread for each request. Shell, browser, plugin, and host MCP capabilities are isolated. Application tool calls are returned to the caller for execution; the gateway does not execute them on the app's behalf. This is a real model bridge using the account or upstream configured in Codex and its associated quota. `model/list` is only a catalog and does not establish that the current account can run a particular model.
 
-Codex 会继承启动网关时的 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`。未显式设置代理时，macOS 会读取系统已启用的本机 HTTP/HTTPS 代理，仅传给 Codex 子进程，不修改系统配置。PAC 和非本机代理不会自动导入；其他平台或特殊网络请显式设置环境变量。模型列表正常但推理长时间重连时，先检查 CLI 的代理连接。
+Codex inherits `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` from the environment that starts the gateway. When no proxy is explicitly configured, macOS detects enabled system HTTP/HTTPS proxies on loopback and passes them only to the Codex child process, without changing system settings. PAC and non-loopback proxies are not imported automatically; set the environment variables explicitly on other platforms or for custom networks. If model listing works but inference keeps reconnecting, check the CLI's proxy connection first.
 
-Codex 内置认证的适用范围与托管服务不同。商业/托管场景需要另行评估正式 API 或 Sign in with ChatGPT 接入。本版本没有实现后者，也不提供共享账号转售或公网代理部署。[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server#auth-endpoints) · [Sign in with ChatGPT](https://developers.openai.com/siwc)
+Built-in Codex authentication has a different scope from hosted services. For commercial or hosted use, evaluate the official API or Sign in with ChatGPT separately. This release does not implement Sign in with ChatGPT or provide shared-account resale or public proxy deployment. [Official App Server documentation](https://learn.chatgpt.com/docs/app-server#auth-endpoints) · [Sign in with ChatGPT](https://developers.openai.com/siwc)
 
-## 兼容范围
+## Compatibility
 
 - `GET /v1/models`
-- `POST /v1/chat/completions`：文本消息、非流式 JSON、SSE、工具调用与结果回传。
-- 上游实际报告的 Token 用量；缺失用量保留未知，不伪造为零。
-- 客户端断开/取消、请求超时、并发上限、项目密钥撤销。
-- 管理 API：连接、目录、模型启停、功能别名、项目密钥、在途请求取消。
+- `POST /v1/chat/completions`: text messages, non-streaming JSON, SSE, tool calls, and tool-result round trips.
+- Token usage as reported by the upstream. Missing usage stays unknown rather than being fabricated as zero.
+- Client disconnects and cancellation, request timeouts, concurrency limits, and project-key revocation.
+- Management APIs for connections, catalogs, model enablement, aliases, project keys, and cancellation of in-flight requests.
 
-**这是明确子集的兼容实现。** 不支持的参数显式报错。Codex 无法保证 `temperature`、`max_tokens` 等语义，所以不会默默接收后忽略。完整参数矩阵见 [兼容性说明](docs/compatibility.md)，管理接口见 [API 文档](docs/api.md)。
+**Compatibility is limited to an explicit subset.** Unsupported parameters return errors. Codex cannot guarantee the semantics of options such as `temperature` or `max_tokens`, so it does not silently accept and ignore them. See the [compatibility matrix](docs/compatibility.md) and [management API documentation](docs/api.md).
 
-首版不包含 Responses API、图片/语音/视频、远程设备配对、多用户托管、计费、自动换源，以及 Ollama 模型下载/删除/加载管理。下一阶段边界见 [路线图](docs/roadmap.md)。
+The initial release does not include the Responses API, image/audio/video support, remote device pairing, multi-user hosting, billing, automatic provider fallback, or Ollama model download/deletion/loading management. See the [roadmap](docs/roadmap.md) for the next phase.
 
-## 数据与配置
+## Data and configuration
 
-默认数据位于当前用户的 `~/.model-dock`，可以用 `MODEL_DOCK_HOME` 指定专用目录。每个目录只允许一个网关进程写入。
+Data is stored in the current user's `~/.model-dock` by default. Set `MODEL_DOCK_HOME` to use a dedicated directory. Only one gateway process may write to a directory at a time.
 
-- `state.json`：连接、模型、别名、哈希后的项目密钥，以及 AES-256-GCM 加密的上游密钥。
-- `master.key`：解密密钥；`admin.token`：本机管理令牌。
-- 文件权限在 POSIX 上为 `0600`，目录为 `0700`。Windows 需使用当前用户专有目录并配置相应 ACL。
-- 原子写入和修订号防止并发覆盖。读取不会重置损坏配置。
-- 默认只在内存保留最近 100 条调用元数据，不保存提示词和回答；重启清空。
+- `state.json`: connections, models, aliases, hashed project keys, and upstream keys encrypted with AES-256-GCM.
+- `master.key`: the decryption key. `admin.token`: the local administrator token.
+- POSIX file permissions are `0600`, and directory permissions are `0700`. On Windows, use a directory private to the current user and configure the corresponding ACLs.
+- Atomic writes and revision checks prevent concurrent overwrites. Reading a corrupted configuration does not reset it.
+- By default, only the latest 100 request metadata records are kept in memory. Prompts and responses are not stored, and the history clears on restart.
 
-备份应整体备份数据目录。加密密钥与数据保存在同一台机器上，不能抵御已经取得当前系统账号权限的攻击者。不要把此目录放入 Git、同步给不受信任的账号或公开共享。
+Back up the entire data directory together. The encryption key and data reside on the same machine, so this does not protect against someone who already has access to the current OS account. Do not commit this directory to Git, sync it to untrusted accounts, or share it publicly.
 
 ```sh
 # macOS / Linux
 MODEL_DOCK_PORT=4320 MODEL_DOCK_HOME=/path/to/private/data npm start
 ```
 
-PowerShell 可使用 `$env:MODEL_DOCK_PORT='4320'` 设置变量。`.env.example` 仅说明配置项；应用不会隐式读取 `.env`。
+In PowerShell, set variables with syntax such as `$env:MODEL_DOCK_PORT='4320'`. `.env.example` documents the available settings; the application does not load `.env` implicitly.
 
-## 开发与打包
+## Development and packaging
 
 ```sh
 npm ci
-npm run verify       # 语法、协议边界、HTTP 集成、官方 SDK 与 DOM 交互测试
-npm run pack:check   # 打包、在隔离目录安装、运行安装后的 CLI 与静态页面
+npm run verify       # Syntax, protocol boundaries, HTTP integration, official SDK, and DOM tests
+npm run pack:check   # Package, install in isolation, and verify the installed CLI and static assets
 npm pack
 ```
 
-安装本地构建的发行包：
+Install a locally built package:
 
 ```sh
 npm install --global ./lab-model-dock-0.1.0.tgz
 model-dock serve --open
 ```
 
-源码仓库：[idea007/model-dock](https://github.com/idea007/model-dock)。npm 包名为 `lab-model-dock`，尚未发布到 npm；上述安装命令使用本地生成的 tarball。构建不需要博客仓库、数据库或其环境文件。
+Source repository: [idea007/model-dock](https://github.com/idea007/model-dock). The npm package name is `lab-model-dock`; it has not been published to npm. The installation command above uses a locally generated tarball. Building does not require the original blog repository, its database, or its environment files.
 
-自动测试使用本机 HTTP/JSON-RPC fixtures，不读取真实 Codex 账号，也不调用付费模型。CI 配置覆盖 macOS、Linux、Windows 上的 Node 22/24；实际执行结果以 CI 为准。
+Automated tests use local HTTP/JSON-RPC fixtures. They do not read a real Codex account or call paid models. CI covers Node.js 22/24 on macOS, Linux, and Windows; refer to the CI runs for actual results.
 
-首次交付的实际测试结果、真实 Ollama/Codex 调用和未验证边界见 [验证记录](docs/verification.md)。
+See the [verification record](docs/verification.md) for the initial test results, real Ollama/Codex calls, and remaining verification boundaries.
 
 ```text
-apps/gateway/       CLI、HTTP 和静态资源入口
-apps/console/       无构建步骤的管理台
-packages/core/      配置持久化、授权、目录、路由、调用治理
-packages/protocol/  校验、错误与流式协议
-packages/providers/ OpenAI-compatible、Ollama、Codex
-examples/           可独立接入的客户端示例
-tests/              离线协议与集成测试
+apps/gateway/       CLI, HTTP, and static asset entry points
+apps/console/       Console with no build step
+packages/core/      Persistence, authorization, catalogs, routing, and request controls
+packages/protocol/  Validation, errors, and streaming protocol
+packages/providers/ OpenAI-compatible, Ollama, and Codex adapters
+examples/           Standalone client examples
+tests/              Offline protocol and integration tests
 ```
 
-详见 [架构与迁移边界](docs/architecture.md)、[贡献说明](CONTRIBUTING.md) 和 [安全说明](SECURITY.md)。
+See the [architecture and extraction boundaries](docs/architecture.md), [contributing guide](CONTRIBUTING.md), and [security notes](SECURITY.md).
 
 ## License
 
-MIT。来源与提取范围见 [NOTICE](NOTICE)。本项目不分发 Codex、Ollama 或任何模型权重，它们各自的许可和服务条件独立适用。
+MIT. See [NOTICE](NOTICE) for provenance and extraction scope. This project does not distribute Codex, Ollama, or any model weights; their respective licenses and service terms apply independently.
