@@ -7,7 +7,10 @@ import { GatewayError } from '../packages/protocol/index.mjs';
 import { setup, fixtureUpstream, until } from './helpers.mjs';
 
 test('console: login, connection discovery, model publication, scoped key and JSON/SSE playground', async t => {
-  const upstream = await fixtureUpstream(t), app = await setup(t);
+  const upstream = await fixtureUpstream(t, [{
+    id: 'shared', max_input_tokens: 1_000_000, max_output_tokens: 393_216, context_window: 1_000_000,
+    reasoning_efforts: ['none', 'low', 'high', 'max'], default_reasoning_effort: 'high', capabilities: { text: true, thinking: true }
+  }, { id: 'slow' }, { id: 'broken' }]), app = await setup(t);
   const html = await fs.readFile(new URL('../apps/console/index.html', import.meta.url), 'utf8');
   const dom = new JSDOM(html, { url: app.origin });
   const win = dom.window, document = win.document;
@@ -55,16 +58,25 @@ test('console: login, connection discovery, model publication, scoped key and JS
   assert.equal(document.querySelectorAll('.catalog-model').length, 3);
   const model = app.store.read().models.find(item => item.nativeId === 'shared');
   assert.equal(document.querySelector('[data-action="add-route"]'), null, 'business features have moved out of the server console');
+  const row = `[data-model-id="${model.id}"]`;
+  const effort = `${row} .catalog-level[data-level="none"]`;
+  const pin = `${row} [data-action="pin-model-effort"][data-level="low"]`;
   const publish = `[data-action="publish-model"][data-id="${model.id}"]`;
+  assert.match(document.querySelector(`${row} .catalog-limits`).textContent.replace(/\s+/g, ' '), /最大输入 1M · 最大输出 384K tokens/);
+  assert.equal(document.querySelector(effort).disabled, true);
   click(publish);
   assert.equal(document.querySelector(publish).getAttribute('aria-checked'), 'true');
   assert.equal(app.store.read().models.find(row => row.id === model.id).enabled, false, 'publication changes wait for save');
+  click(effort); click(pin);
+  assert.equal(document.querySelector(effort).getAttribute('aria-pressed'), 'false');
+  assert.equal(document.querySelector(pin).getAttribute('aria-pressed'), 'true');
+  assert.equal(app.store.read().models.find(row => row.id === model.id).reasoningPolicy, undefined, 'reasoning changes wait for save');
   assert.match(document.querySelector('.catalog-runtime').textContent, /API 连接正常/);
   const check = '[data-action="check-connection"]';
   const refresh = '[data-action="refresh-catalog"]';
   const provider = app.gateway.providers.openai;
   const pendingCheck = Promise.withResolvers();
-  let checks = 0;
+  let checks = 0, inferenceDenied = false;
   app.gateway.providers.openai = {
     ...provider,
     async discover(...args) {
@@ -74,6 +86,10 @@ test('console: login, connection discovery, model publication, scoped key and JS
         throw new GatewayError('Fixture rejected the catalog request.', 502, 'upstream_auth_failed');
       }
       return provider.discover(...args);
+    },
+    async *generate(...args) {
+      if (inferenceDenied) throw new GatewayError('Fixture rejected the inference request.', 502, 'upstream_auth_failed');
+      yield* provider.generate(...args);
     }
   };
   click(check);
@@ -91,11 +107,14 @@ test('console: login, connection discovery, model publication, scoped key and JS
   await until(() => document.querySelector('.catalog-runtime')?.dataset.status === 'connected');
   assert.equal(checks, 2, 'toolbar refresh checks the configured service');
   assert.equal(document.querySelector(publish).getAttribute('aria-checked'), 'true');
+  assert.equal(document.querySelector(effort).getAttribute('aria-pressed'), 'false');
+  assert.equal(document.querySelector(pin).getAttribute('aria-pressed'), 'true');
   assert.equal(app.store.read().models.find(row => row.id === model.id).enabled, false, 'refresh does not save the draft');
   assert.equal(upstream.calls.length, 0, 'status checks do not invoke a model');
   click('[data-action="save-publication"]');
   await until(() => app.store.read().models.find(row => row.id === model.id).enabled);
   await until(() => document.querySelector('[data-action="save-publication"]').textContent === '已保存');
+  assert.deepEqual(app.store.read().models.find(row => row.id === model.id).reasoningPolicy, { allowedEfforts: ['low', 'high', 'max'], defaultEffort: 'low' });
   click('[data-view="keys"]'); click('[data-action="add-key"]'); fill('name', '测试 demo');
   document.querySelector(`[name="models"][value="${model.id}"]`).checked = true;
   submit('#modal-form');
@@ -109,9 +128,19 @@ test('console: login, connection discovery, model publication, scoped key and JS
   await until(() => document.querySelector('#response-status').textContent === '已完成');
   assert.equal(document.querySelector('#response-output').textContent, '你好，来自测试上游。');
   assert.match(document.querySelector('#response-meta').textContent, /输入 5 \/ 输出 7/);
+  assert.equal(upstream.calls.at(-1).body.reasoning_effort, 'low');
   await until(() => !document.querySelector('#send-button').disabled);
   document.querySelector('[name="stream"]').checked = false; submit('#play-form');
   await until(() => document.querySelector('#response-status').textContent === '已完成');
   assert.equal(document.querySelector('#response-output').textContent, '你好，来自测试上游。');
   await until(() => !document.querySelector('#send-button').disabled);
+  inferenceDenied = true;
+  submit('#play-form');
+  await until(() => document.querySelector('#response-status').textContent === '失败');
+  click('[data-view="connections"]'); click('[data-action="refresh"]');
+  await until(() => document.querySelector('#toast').textContent === '状态已刷新。');
+  click('[data-view="models"]');
+  assert.match(document.querySelector('.catalog-runtime').textContent, /API 最近调用失败/);
+  click(check);
+  await until(() => document.querySelector('.catalog-runtime')?.dataset.status === 'connected');
 });

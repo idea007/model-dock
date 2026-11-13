@@ -11,8 +11,11 @@ const icons = {
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   terminal: '<path d="m5 6 5 6-5 6m8 0h6"/>',
-  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.01"/>',
+  sliders: '<path d="M3 7h9m5 0h4M3 17h4m5 0h9"/><circle cx="14.5" cy="7" r="2.5"/><circle cx="9.5" cy="17" r="2.5"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6"/><circle cx="12" cy="17" r=".8" fill="currentColor" stroke="none"/>',
   refresh: '<path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/>',
+  cycle: '<path d="M22 4v6h-6M2 20v-6h6M22 10A10 10 0 0 0 3 7M2 14a10 10 0 0 0 19 3"/>',
+  pin: '<path d="m16 3 5 5-4 1-4 4 1 3-2 2-6-6 2-2 3 1 4-4zM8 16l-5 5"/>',
   copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
   cloud: '<path d="M6 18a5 5 0 0 1-1-10 7 7 0 0 1 13-1 5.5 5.5 0 0 1 0 11z"/>',
   computer: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>'
@@ -24,12 +27,12 @@ const types = {
   codex: { name: 'Codex', icon: 'terminal', description: '连接已登录的 Codex CLI，通过统一接口使用文本能力。', hint: '实验性适配', defaultName: '本机 Codex', baseUrl: '' }
 };
 const views = { connections: ['连接与凭证', 'plug'], models: ['模型与服务', 'models'], playground: ['调用测试', 'play'], keys: ['项目访问', 'key'] };
-const publicationKey = 'model-dock-publication-draft';
-let publicationDraft, publicationError = '';
+const settingsKey = 'model-dock-publication-draft';
+let settingsDraft, settingsError = '';
 let catalogRefresh, catalogNotice = '';
 const catalogColumns = [
-  { key: 'provider', label: '凭证 / 服务', width: 176, min: 128 },
-  { key: 'model', label: '模型', width: 280, min: 180 }
+  { key: 'provider', label: '凭证 / 服务', width: 152, min: 120 },
+  { key: 'model', label: '模型', width: 256, min: 180 }
 ];
 const catalogWidths = new Map();
 try {
@@ -42,14 +45,25 @@ let state, view = new URLSearchParams(location.search).get('view') || 'connectio
 if (!views[view]) view = 'connections';
 let token = sessionStorage.getItem('model-dock-token') || '';
 const fragment = new URLSearchParams(location.hash.slice(1));
-if (fragment.has('token')) { if (fragment.get('token') !== token) sessionStorage.removeItem(publicationKey); token = fragment.get('token'); sessionStorage.setItem('model-dock-token', token); history.replaceState(null, '', location.pathname + location.search); }
+if (fragment.has('token')) { if (fragment.get('token') !== token) sessionStorage.removeItem(settingsKey); token = fragment.get('token'); sessionStorage.setItem('model-dock-token', token); history.replaceState(null, '', location.pathname + location.search); }
 try {
-  const saved = JSON.parse(sessionStorage.getItem(publicationKey) || 'null');
+  const saved = JSON.parse(sessionStorage.getItem(settingsKey) || 'null');
   if (Number.isSafeInteger(saved?.revision) && Array.isArray(saved.changes)) {
-    const changes = new Map(saved.changes.filter(row => Array.isArray(row) && typeof row[0] === 'string' && typeof row[1] === 'boolean'));
-    if (changes.size) publicationDraft = { revision: saved.revision, changes };
+    const changes = new Map();
+    for (const [id, value] of saved.changes.filter(Array.isArray)) {
+      if (typeof id !== 'string') continue;
+      const patch = {};
+      if (typeof value === 'boolean') patch.enabled = value;
+      if (typeof value?.enabled === 'boolean') patch.enabled = value.enabled;
+      const policy = value?.reasoningPolicy;
+      if (policy === null || Array.isArray(policy?.allowedEfforts) && policy.allowedEfforts.every(level => typeof level === 'string') && typeof policy.defaultEffort === 'string') {
+        patch.reasoningPolicy = policy;
+      }
+      if (Object.keys(patch).length) changes.set(id, patch);
+    }
+    if (changes.size) settingsDraft = { revision: saved.revision, changes };
   }
-} catch { sessionStorage.removeItem(publicationKey); }
+} catch { sessionStorage.removeItem(settingsKey); }
 const usable = model => model.enabled && model.available !== false && state.connections.some(connection => connection.id === model.connectionId && connection.enabled);
 const usableModels = () => state.models.filter(usable);
 const availableChoices = () => usableModels().map(model => ({ id: model.id, name: `${model.name} · ${state.connections.find(c => c.id === model.connectionId)?.name}` }));
@@ -127,14 +141,14 @@ const catalogFilters = [
 ];
 const effortLabels = { none: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '极限', ultra: '超高' };
 
-function rememberPublication() {
+function rememberSettings() {
   try {
-    if (publicationDraft) {
-      const { revision, changes } = publicationDraft;
-      sessionStorage.setItem(publicationKey, JSON.stringify({ revision, changes: [...changes] }));
-    } else sessionStorage.removeItem(publicationKey);
+    if (settingsDraft) {
+      const { revision, changes } = settingsDraft;
+      sessionStorage.setItem(settingsKey, JSON.stringify({ revision, changes: [...changes] }));
+    } else sessionStorage.removeItem(settingsKey);
   } catch {
-    if (publicationDraft) publicationError = '无法暂存草稿，请在关闭页面前保存。';
+    if (settingsDraft) settingsError = '无法暂存草稿，请在关闭页面前保存。';
   }
 }
 
@@ -148,74 +162,148 @@ function modelTags(model) {
   return tags;
 }
 
-function reasoningLevels(model) {
-  const declared = model.reasoningEfforts || [];
-  return {
-    declared,
-    allowed: model.reasoningPolicy?.allowedEfforts || declared,
-    defaultEffort: model.reasoningPolicy?.defaultEffort || model.defaultEffort
-  };
+function draftModelSettings(model) {
+  const changes = settingsDraft?.changes.get(model.id);
+  return { enabled: model.enabled, reasoningPolicy: model.reasoningPolicy ?? null, ...changes };
+}
+
+function reasoningLevels(model, policy) {
+  const declared = [...new Set(model.reasoningEfforts || [])];
+  const configured = Array.isArray(policy?.allowedEfforts) ? policy.allowedEfforts : [];
+  const allowed = policy ? declared.filter(level => configured.includes(level)) : declared;
+  const preferred = policy?.defaultEffort ?? model.defaultEffort;
+  const defaultEffort = allowed.includes(preferred) ? preferred : null;
+  return { declared, allowed, defaultEffort, obsolete: Boolean(policy && (!defaultEffort || allowed.length !== configured.length)) };
+}
+
+function changeModelSettings(model, patch) {
+  const changes = { ...settingsDraft?.changes.get(model.id), ...patch };
+  if (changes.enabled === model.enabled) delete changes.enabled;
+  if (Object.hasOwn(changes, 'reasoningPolicy')) {
+    const saved = model.reasoningPolicy ?? null;
+    const next = changes.reasoningPolicy;
+    const baseline = saved || { allowedEfforts: model.reasoningEfforts || [], defaultEffort: model.defaultEffort };
+    if (next === saved || next && next.defaultEffort === baseline.defaultEffort && next.allowedEfforts.length === baseline.allowedEfforts?.length
+      && next.allowedEfforts.every(level => baseline.allowedEfforts.includes(level))) delete changes.reasoningPolicy;
+  }
+  settingsDraft ??= { revision: state.revision, changes: new Map() };
+  if (Object.keys(changes).length) settingsDraft.changes.set(model.id, changes);
+  else settingsDraft.changes.delete(model.id);
+  if (!settingsDraft.changes.size) settingsDraft = undefined;
+  settingsError = catalogNotice = '';
+  rememberSettings();
+  render();
+}
+
+function changeModelEffort(model, level, pin) {
+  const { reasoningPolicy } = draftModelSettings(model);
+  const { declared, allowed, defaultEffort } = reasoningLevels(model, reasoningPolicy);
+  if (!declared.includes(level) || pin && !allowed.includes(level)) return;
+  const allowedEfforts = pin ? allowed : declared.filter(value => value === level ? !allowed.includes(value) : allowed.includes(value));
+  if (!allowedEfforts.length) return;
+  let nextDefault = pin ? level : defaultEffort;
+  if (!allowedEfforts.includes(nextDefault)) {
+    const lower = declared.slice(0, declared.indexOf(defaultEffort)).findLast(value => allowedEfforts.includes(value));
+    nextDefault = defaultEffort ? lower || allowedEfforts[0] : allowedEfforts.at(-1);
+  }
+  changeModelSettings(model, { reasoningPolicy: { allowedEfforts, defaultEffort: nextDefault } });
 }
 
 function compactTokens(value) {
+  if (!Number.isSafeInteger(value) || value <= 0) return '未声明';
   if (value % 1_048_576 === 0) return `${value / 1_048_576}M`;
   if (value % 1_000_000 === 0) return `${value / 1_000_000}M`;
   if (value % 1000 === 0) return `${value / 1000}K`;
   if (value % 1024 === 0) return `${value / 1024}K`;
-  return value.toLocaleString();
+  return value.toLocaleString('en-US');
 }
 
 function catalogModel(model, connection) {
   const available = model.available !== false && connection.enabled;
-  const enabled = publicationDraft?.changes.get(model.id) ?? model.enabled;
-  const { declared, allowed, defaultEffort } = reasoningLevels(model);
+  const { enabled, reasoningPolicy } = draftModelSettings(model);
+  const { declared, allowed, defaultEffort, obsolete } = reasoningLevels(model, reasoningPolicy);
+  const pending = Boolean(busy || catalogRefresh);
+  const locked = pending || !enabled || !available;
+  const modelId = escape(model.id), name = escape(model.name);
   const tags = modelTags(model);
-  return `<div class="catalog-model" data-model-id="${escape(model.id)}">
+  const inputLimit = compactTokens(model.maxInputTokens), outputLimit = compactTokens(model.maxOutputTokens);
+  const limitsKnown = inputLimit !== '未声明' || outputLimit !== '未声明';
+  const context = compactTokens(model.contextWindow);
+  const levels = declared.map(level => {
+    const label = Object.hasOwn(effortLabels, level) ? effortLabels[level] : level;
+    const open = allowed.includes(level);
+    const title = open && allowed.length === 1 ? '至少保留一个开放等级' : `${open ? '关闭' : '开放'}此思考等级`;
+    return { level: escape(level), label: escape(label), open, pinned: level === defaultEffort, title, disabled: locked || open && allowed.length === 1 };
+  });
+  return `<div class="catalog-model" data-model-id="${modelId}" data-enabled="${enabled}">
     <div class="catalog-model-info">
-      <h3>${escape(model.name)}</h3>
-      ${tags.length ? `<div class="catalog-badges">${tags.map(tag => `<span class="catalog-badge">${escape(tag)}</span>`).join('')}</div>` : ''}
-      <div class="catalog-limits">${model.contextWindow ? `上下文 ${compactTokens(model.contextWindow)} tokens` : '上下文上限未声明'}
-        <button class="catalog-icon" data-action="model-details" data-id="${escape(model.id)}" data-catalog-focus="details:${escape(model.id)}"
-          aria-label="查看${escape(model.name)}详情" aria-haspopup="dialog">${icon('info')}</button>
+      <h3>${name}</h3>
+      ${tags.length ? `<div class="catalog-badges" role="group" aria-label="${name}模型能力">${tags.map(tag => `<span class="catalog-badge">${escape(tag)}</span>`).join('')}</div>` : ''}
+      <div class="catalog-limits">最大输入 ${inputLimit} · 最大输出 ${outputLimit}
+        <span class="catalog-limits-end">${limitsKnown ? 'tokens' : ''}<button type="button" class="catalog-icon" data-action="model-details" data-id="${modelId}"
+          data-catalog-focus="details:${modelId}" aria-label="查看${name}详情" aria-haspopup="dialog" title="模型详情">${icon('info')}</button></span>
       </div>
+      ${!limitsKnown && context !== '未声明' ? `<p class="catalog-limits">上下文窗口 ${context} tokens</p>` : ''}
+      ${levels.length ? `<span class="catalog-caption">开放的思考深度</span>
+        <div class="catalog-levels" role="group" aria-label="${name}开放的思考深度">${levels.map(({ level, label, open, title, disabled }) => `<button type="button" class="catalog-level" data-action="toggle-model-effort" data-id="${modelId}" data-level="${level}"
+          data-catalog-focus="open:${modelId}:${level}" aria-pressed="${open}" title="${title}" ${disabled ? 'disabled' : ''}>${label === level ? level : `${label}（${level}）`}</button>`).join('')}</div>` : ''}
       <div class="catalog-publication">
-        <button class="catalog-switch" role="switch" aria-checked="${enabled}" aria-label="发布 ${escape(model.name)}"
-          data-action="publish-model" data-id="${escape(model.id)}" data-catalog-focus="publish:${escape(model.id)}"
-          ${busy || catalogRefresh || !available && !enabled ? 'disabled' : ''}><span class="catalog-track" aria-hidden="true"></span>${enabled ? '已发布' : '未发布'}</button>
+        <button type="button" class="catalog-switch" role="switch" aria-checked="${enabled}" aria-label="发布 ${name}"
+          data-action="publish-model" data-id="${modelId}" data-catalog-focus="publish:${modelId}"
+          ${pending || !available && !enabled ? 'disabled' : ''}><span class="catalog-track" aria-hidden="true"></span>${enabled ? '已启用' : '未启用'}</button>
         ${available ? '' : '<span class="catalog-warning">当前不可用</span>'}
       </div>
     </div>
     <div class="catalog-reasoning">
-      ${declared.length ? `<div class="catalog-levels">${declared.map(level => {
-        const open = allowed.includes(level), pinned = open && level === defaultEffort;
-        return `<span class="catalog-level" data-allowed="${open}" data-default="${pinned}">${escape(effortLabels[level] ? `${effortLabels[level]}（${level}）` : level)}${pinned ? '<small>默认</small>' : open ? '' : '<small>未开放</small>'}</span>`;
-      }).join('')}</div>` : '<span class="catalog-muted">未声明</span>'}
+      ${levels.length ? `<div class="catalog-levels" role="group" aria-label="${name}思考深度（可选 / 默认）">${levels.map(({ level, label, open, pinned, title, disabled }) => `<span class="catalog-effort" data-allowed="${open}" data-locked="${locked}">
+        <button type="button" class="catalog-effort-toggle" data-action="toggle-model-effort" data-id="${modelId}" data-level="${level}"
+          data-catalog-focus="effort:${modelId}:${level}" aria-label="${name}：${label}可选" aria-pressed="${open}" title="${title}" ${disabled ? 'disabled' : ''}>${label}</button>
+        <button type="button" class="catalog-effort-pin" data-action="pin-model-effort" data-id="${modelId}" data-level="${level}"
+          data-catalog-focus="pin:${modelId}:${level}" aria-label="${name}：${label}设为默认" aria-pressed="${pinned}"
+          title="${pinned ? '默认思考深度' : open ? `将${label}设为默认` : '请先开放此深度'}" ${locked || !open ? 'disabled' : ''}>${icon('pin')}</button>
+      </span>`).join('')}</div>` : '<span class="catalog-muted">—</span>'}
+      ${obsolete ? '<p class="catalog-caption catalog-warning">思考深度已变更，请重新选择或恢复上游设置。</p>' : ''}
+      ${reasoningPolicy ? `<button type="button" class="catalog-text" data-action="reset-model-efforts" data-id="${modelId}"
+        data-catalog-focus="reset:${modelId}" ${pending ? 'disabled' : ''}>恢复上游设置</button>` : ''}
     </div>
   </div>`;
 }
 
 const connectionErrors = {
-  upstream_auth_failed: '请检查 API 密钥和模型目录权限。',
+  upstream_auth_failed: '请检查 API 密钥和模型权限。',
   upstream_unreachable: '无法连接服务，请检查服务地址和运行状态。',
   upstream_rate_limited: '服务限流，请稍后重试。',
-  upstream_protocol_error: '服务返回了无法读取的模型目录。',
+  upstream_protocol_error: '上游返回了无法读取的响应。',
   codex_auth_required: '请先登录本机 Codex CLI。',
   codex_unavailable: '无法启动本机 Codex CLI，请检查安装状态。',
-  codex_timeout: 'Codex 未及时响应，请重试。'
+  codex_timeout: 'Codex 未及时响应，请重试。',
+  codex_connection_failed: 'Codex 无法连接上游服务。',
+  codex_rate_limited: 'Codex 额度已用尽。'
 };
+
+function recentModelCall(connectionId, nativeModel) {
+  return state.requests.find(request => request.connectionId === connectionId
+    && (nativeModel === undefined || request.nativeModel === nativeModel)
+    && ['succeeded', 'failed'].includes(request.status));
+}
 
 function connectionHealth(connection, models) {
   if (!connection?.enabled) return { status: 'disabled', label: '服务已停用' };
   if (catalogRefresh?.id === connection.id) return { status: 'checking', label: '正在检测…' };
   const apiSource = connection.type === 'openai';
-  if (connection.status === 'error') {
+  const lastCall = recentModelCall(connection.id);
+  const newerCall = lastCall && connection.checkedAt && Date.parse(lastCall.startedAt) + lastCall.durationMs > Date.parse(connection.checkedAt);
+  const callError = newerCall && lastCall.status === 'failed' && connectionErrors[lastCall.errorCode];
+  if (callError) return { status: 'call_failed', label: apiSource ? 'API 最近调用失败' : '最近调用失败', detail: callError };
+  const callSucceeded = newerCall && lastCall.status === 'succeeded';
+  if (connection.status === 'error' && !callSucceeded) {
     return {
       status: 'error',
       label: apiSource ? 'API 异常' : '连接异常',
       detail: connectionErrors[connection.errorCode] || '连接检测失败，请重试。'
     };
   }
-  if (connection.status === 'connected') {
+  if (connection.status === 'connected' || callSucceeded) {
     if (apiSource) return { status: 'connected', label: 'API 连接正常' };
     const available = models.filter(model => model.available !== false).length;
     if (!available) return { status: 'unknown', label: '暂无可用模型' };
@@ -228,20 +316,22 @@ function connectionHealth(connection, models) {
 function catalogConnection(connection, models, total) {
   const { status, label, detail } = connectionHealth(connection, total);
   const checking = status === 'checking';
-  const checkTitle = checking ? '正在检测连接…' : '刷新连接状态并更新此服务的模型目录';
+  const checkTitle = checking ? '正在检测连接…' : '刷新连接状态';
   const lastCheck = connection.checkedAt ? `上次检测 ${timestamp(connection.checkedAt)}` : '尚未检测';
-  const statusTitle = `${lastCheck}\n连接状态来自模型目录检测。`;
-  return `<section class="catalog-group" aria-label="${escape(connection.name)}模型">
+  const statusTitle = `${lastCheck}\n根据连接检测和最近实际调用判断。`;
+  const source = connection.type === 'openai' ? connection.hasKey ? 'API Key · 已配置' : 'OpenAI-compatible'
+    : connection.type === 'codex' ? 'Codex CLI · 本机登录' : 'Ollama';
+  return `<section class="catalog-group" aria-label="${escape(connection.name)}模型" data-enabled="${connection.enabled}">
     <div class="catalog-source">
       <h2>${escape(connection.name)}</h2>
-      <p>${escape(types[connection.type]?.name)}${connection.hasKey ? ' · 已配置密钥' : ''}</p>
-      <span class="catalog-badge">${total.filter(model => model.available !== false).length} / ${total.length} 已配置</span>
+      <p>${source}</p>
+      <span class="catalog-badge">${models.filter(model => model.available !== false).length} / ${models.length} 已配置</span>
       <div class="catalog-runtime" data-status="${status}" title="${escape(statusTitle)}">
         <span class="catalog-status-dot" aria-hidden="true"></span>
         <span role="status">${label}</span>
         <button type="button" class="catalog-icon catalog-status-refresh" data-action="check-connection" data-id="${escape(connection.id)}"
           data-catalog-focus="check:${escape(connection.id)}" aria-label="刷新${escape(connection.name)}连接状态" title="${checkTitle}"
-          aria-busy="${checking}" ${busy || catalogRefresh || !connection.enabled ? 'disabled' : ''}>${icon('refresh')}</button>
+          aria-busy="${checking}" ${busy || catalogRefresh || !connection.enabled ? 'disabled' : ''}>${icon('cycle')}</button>
       </div>
       ${detail ? `<p class="catalog-runtime-error">${escape(detail)}</p>` : ''}
       ${connection.type === 'openai' ? `<button class="catalog-text" data-action="add-model" data-id="${escape(connection.id)}" ${busy || catalogRefresh ? 'disabled' : ''}>手动添加模型</button>` : ''}
@@ -275,7 +365,7 @@ function modelTable() {
     <button type="button" class="catalog-resizer" data-catalog-column="${column.key}" data-catalog-focus="column:${column.key}"
       role="separator" aria-orientation="vertical" aria-label="调整${column.label}列宽" aria-valuemin="${column.min}" aria-valuemax="1200"
       aria-valuenow="${catalogWidth(column)}" title="拖动调整列宽，双击恢复默认宽度"></button></span>`).join('')}
-    <span>思考深度（可用 / 默认）</span></div>${groups}</div>`;
+    <span>思考深度（可选 / 默认）</span></div>${groups}</div>`;
 }
 
 function catalogWidth(column, width = catalogWidths.get(column.key) ?? column.width) {
@@ -302,16 +392,20 @@ function rememberCatalogWidths() {
 }
 
 function modelsPage() {
-  const dirty = publicationDraft?.changes.size || 0;
-  const conflict = publicationDraft && publicationDraft.revision !== state.revision;
+  const dirty = settingsDraft?.changes.size || 0;
+  const conflict = settingsDraft && settingsDraft.revision !== state.revision;
   const pending = Boolean(busy || catalogRefresh);
   const refreshing = Boolean(catalogRefresh?.all);
   const refreshLabel = refreshing ? '正在刷新…' : dirty ? '更新目录（保留修改）' : '刷新目录';
   const feedback = dirty ? `${dirty} 项未保存` : catalogNotice;
-  const unavailable = state.models.some(model => publicationDraft?.changes.get(model.id) === true
+  const unavailable = state.models.some(model => settingsDraft?.changes.get(model.id)?.enabled === true
     && (model.available === false || !state.connections.find(connection => connection.id === model.connectionId)?.enabled));
-  const enabled = state.models.filter(model => publicationDraft?.changes.get(model.id) ?? model.enabled).length;
-  return `<div class="cm-page-heading"><h1>${icon('models')} 模型与服务</h1></div>
+  const invalidEfforts = state.models.some(model => {
+    const policy = settingsDraft?.changes.get(model.id)?.reasoningPolicy;
+    return policy && reasoningLevels(model, policy).obsolete;
+  });
+  const enabled = state.models.filter(model => draftModelSettings(model).enabled).length;
+  return `<div class="cm-page-heading"><h1>${icon('sliders')} 模型与服务</h1></div>
     <section class="catalog-manager" aria-label="模型与服务" aria-busy="${pending}">
       <div class="catalog-toolbar">
         <div class="catalog-filters" role="group" aria-label="模型类型筛选">
@@ -319,9 +413,9 @@ function modelsPage() {
             data-catalog-focus="filter:${key}" aria-pressed="${modelFilter === key}">${label}</button>`).join('')}
         </div>
         <div class="catalog-actions">
-          <span class="catalog-muted">已发布 ${enabled} / ${state.models.length}</span>
+          <span class="catalog-muted">已启用 ${enabled} / ${state.models.length}</span>
           <button class="catalog-save ${dirty ? 'primary' : ''}" data-action="save-publication" data-catalog-focus="save"
-            ${!dirty || pending || conflict || unavailable ? 'disabled' : ''}>${dirty ? `保存更改 · ${dirty}` : '已保存'}</button>
+            ${!dirty || pending || conflict || unavailable || invalidEfforts ? 'disabled' : ''}>${busy ? '处理中…' : dirty ? `保存更改 · ${dirty}` : '已保存'}</button>
         </div>
       </div>
       <div class="catalog-secondary">
@@ -329,24 +423,25 @@ function modelsPage() {
         <div class="catalog-actions">
           ${feedback ? `<span class="catalog-muted" role="status">${feedback}</span>` : ''}
           <button class="catalog-text" data-view="connections">管理连接与凭证</button>
-          <button class="catalog-text" data-action="revert-publication" ${!dirty || pending ? 'disabled' : ''}>撤销更改</button>
-          <button class="catalog-text catalog-refresh" data-action="refresh-catalog" data-catalog-focus="refresh" aria-busy="${refreshing}"
-            title="检查已启用的服务并更新模型目录" ${pending ? 'disabled' : ''}>${icon('refresh')}${refreshLabel}</button>
+          <button class="catalog-text" data-action="revert-publication" data-catalog-focus="revert" ${!dirty || pending ? 'disabled' : ''}>撤销更改</button>
+          <button class="catalog-text" data-action="refresh-catalog" data-catalog-focus="refresh" aria-busy="${refreshing}"
+            title="检查已启用的服务并更新模型目录" ${pending ? 'disabled' : ''}>${refreshLabel}</button>
         </div>
       </div>
-      ${conflict ? '<p class="catalog-feedback" role="status">目录已在其他页面更新。发布草稿已保留，请撤销更改后重新编辑。</p>' : ''}
+      ${conflict ? '<p class="catalog-feedback" role="status">目录已在其他页面更新。设置草稿已保留，请撤销更改后重新编辑。</p>' : ''}
       ${unavailable && !conflict ? '<p class="catalog-feedback" role="status">有待发布的模型已不可用。请调整对应的发布开关后保存。</p>' : ''}
-      ${publicationError ? `<p class="catalog-feedback catalog-warning" role="alert">${escape(publicationError)}</p>` : ''}
+      ${invalidEfforts && !conflict ? '<p class="catalog-feedback" role="status">部分修改使用了已失效的思考深度。请重新选择或恢复上游设置后保存。</p>' : ''}
+      ${settingsError ? `<p class="catalog-feedback catalog-warning" role="alert">${escape(settingsError)}</p>` : ''}
       <div id="catalog-table" class="catalog-scroll" role="region" tabindex="0" aria-label="按凭证查看模型与服务">${modelTable()}</div>
     </section>`;
 }
 
-function advancePublicationDraft(previousRevision) {
+function advanceSettingsDraft(previousRevision) {
   // Discovery only updates the catalog. A different revision jump can include
-  // another tab's publication changes and must remain a save conflict.
-  if (publicationDraft?.revision === previousRevision && state.revision === previousRevision + 1) {
-    publicationDraft.revision = state.revision;
-    rememberPublication();
+  // another tab's settings changes and must remain a save conflict.
+  if (settingsDraft?.revision === previousRevision && state.revision === previousRevision + 1) {
+    settingsDraft.revision = state.revision;
+    rememberSettings();
   }
 }
 
@@ -359,7 +454,7 @@ async function inspectConnection(id) {
       body: { revision }
     });
     state = result.state;
-    advancePublicationDraft(revision);
+    advanceSettingsDraft(revision);
     return true;
   } catch (error) {
     await load(false);
@@ -367,7 +462,7 @@ async function inspectConnection(id) {
     const recordedFailure = connection?.status === 'error' && connection.errorCode === error.code
       && connection.checkedAt && connection.checkedAt !== checkedAt;
     if (recordedFailure && error.code !== 'revision_conflict') {
-      advancePublicationDraft(revision);
+      advanceSettingsDraft(revision);
       return false;
     }
     throw error;
@@ -380,7 +475,7 @@ async function refreshModelServices(id) {
   const returnFocus = document.activeElement?.dataset?.catalogFocus === focus;
   catalogRefresh = { all, id };
   catalogNotice = '';
-  publicationError = '';
+  settingsError = '';
   render();
   let failed = 0;
   try {
@@ -392,12 +487,12 @@ async function refreshModelServices(id) {
       if (!await inspectConnection(connection.id)) failed++;
     }
     if (failed && all) {
-      publicationError = `${failed} 个服务检测失败。已保留原有目录，请查看各服务的状态。`;
+      settingsError = `${failed} 个服务检测失败。已保留原有目录，请查看各服务的状态。`;
     } else if (!failed) {
       catalogNotice = all ? '目录已更新' : '连接检测完成';
     }
   } catch (error) {
-    publicationError = error.code === 'revision_conflict' ? '目录已更新，请重新检测连接。' : '刷新失败，请重试。';
+    settingsError = error.code === 'revision_conflict' ? '目录已更新，请重新检测连接。' : '刷新失败，请重试。';
   } finally {
     catalogRefresh = undefined;
     if (view === 'models' || view === 'connections') {
@@ -522,9 +617,9 @@ document.addEventListener('submit', async event => {
     event.preventDefault();
     const nextToken = new FormData(event.target).get('token').trim();
     if (nextToken !== token) {
-      publicationDraft = undefined;
-      publicationError = '';
-      rememberPublication();
+      settingsDraft = undefined;
+      settingsError = '';
+      rememberSettings();
     }
     token = nextToken;
     try { await load(); sessionStorage.setItem('model-dock-token', token); } catch (error) { login(error.message); }
@@ -549,9 +644,9 @@ document.addEventListener('click', async event => {
       if (generation) { toast('请先停止或等待当前请求。'); return; }
       token = '';
       sessionStorage.removeItem('model-dock-token');
-      publicationDraft = undefined;
-      publicationError = catalogNotice = '';
-      rememberPublication();
+      settingsDraft = undefined;
+      settingsError = catalogNotice = '';
+      rememberSettings();
       state = null;
       login();
     }
@@ -567,33 +662,36 @@ document.addEventListener('click', async event => {
     if (action === 'refresh-catalog') await refreshModelServices();
     if (action === 'check-connection') await refreshModelServices(id);
     if (action === 'revert-publication') {
-      publicationDraft = undefined;
-      publicationError = '';
+      settingsDraft = undefined;
+      settingsError = '';
       catalogNotice = '已撤销未保存的更改';
-      rememberPublication();
+      rememberSettings();
       render();
     }
     if (action === 'model-details') {
       const model = state.models.find(item => item.id === id);
       if (!model) return;
       const connection = state.connections.find(item => item.id === model.connectionId);
-      const { declared, allowed, defaultEffort } = reasoningLevels(model);
+      const { allowed, defaultEffort } = reasoningLevels(model, draftModelSettings(model).reasoningPolicy);
       const models = state.models.filter(item => item.connectionId === model.connectionId);
       const health = connectionHealth(connection, models);
-      const lastCall = state.requests.find(request => request.connectionId === model.connectionId
-        && request.nativeModel === model.nativeId && ['succeeded', 'failed'].includes(request.status));
+      const lastCall = recentModelCall(model.connectionId, model.nativeId);
+      const formatTokens = value => Number.isSafeInteger(value) && value > 0 ? `${value.toLocaleString('en-US')} tokens` : '上游未声明';
       const fields = [
         ['凭证 / 服务', connection?.name],
-        ['模型 ID', model.id],
+        ['模型 ID', model.nativeId],
+        ['网关模型 ID', model.id],
         ['模型能力', modelTags(model).join('、') || '上游未声明'],
         ['连接状态', [health.label, health.detail].filter(Boolean).join(' · ')],
         ['上次检测', timestamp(connection?.checkedAt)],
         ...(lastCall ? [['最近调用', `${lastCall.status === 'succeeded' ? '成功' : '失败'} · ${timestamp(lastCall.startedAt)}`]] : []),
-        ['上下文上限', model.contextWindow ? `${model.contextWindow.toLocaleString()} tokens` : '上游未声明'],
-        ['可用思考深度', declared.filter(level => allowed.includes(level)).join('、') || '上游未声明'],
-        ['默认思考深度', defaultEffort && declared.includes(defaultEffort) && allowed.includes(defaultEffort) ? defaultEffort : '由上游决定']
+        ['最大输入', formatTokens(model.maxInputTokens)],
+        ['最大输出', formatTokens(model.maxOutputTokens)],
+        ['上下文窗口', formatTokens(model.contextWindow)],
+        ['开放的思考深度', allowed.join('、') || '上游未声明'],
+        ['默认思考深度', defaultEffort || '由上游决定']
       ];
-      showDialog(model.name, '模型规格与网关当前公布的能力。', `<dl class="catalog-details">${fields.map(([label, value]) => `<dt>${label}</dt><dd>${escape(value)}</dd>`).join('')}</dl>`, '关闭', async () => $('#dialog').close());
+      showDialog('模型详情', model.name, `<dl class="catalog-details">${fields.map(([label, value]) => `<dt>${label}</dt><dd>${escape(value)}</dd>`).join('')}</dl>`, '关闭', async () => $('#dialog').close());
     }
     if (action === 'discover') {
       const revision = state.revision;
@@ -602,39 +700,33 @@ document.addEventListener('click', async event => {
         await mutate(`/admin/connections/${encodeURIComponent(id)}/discover`, 'POST');
       } catch (error) {
         if (state.connections.some(connection => connection.id === id && connection.status === 'error' && connection.errorCode === error.code)) {
-          advancePublicationDraft(revision);
+          advanceSettingsDraft(revision);
         }
         throw error;
       }
-      advancePublicationDraft(revision);
+      advanceSettingsDraft(revision);
       render(); toast('目录已更新，新模型需要手动发布。');
     }
     if (action === 'add-model') showDialog('手动添加模型', '适用于未提供模型列表接口的 API。请填写供应商实际支持的模型 ID。', '<label>模型 ID<input name="nativeId" placeholder="供应商模型 ID" required></label><label>显示名称（可选）<input name="name" placeholder="便于识别的名称"></label>', '添加模型', async form => {
       await mutate('/admin/models', 'POST', { connectionId: id, ...Object.fromEntries(form) }); $('#dialog').close(); render(); toast('模型已添加，请手动发布。');
     });
-    if (action === 'publish-model') {
+    if (['publish-model', 'toggle-model-effort', 'pin-model-effort', 'reset-model-efforts'].includes(action)) {
       const model = state.models.find(item => item.id === id);
       if (!model) return;
-      const enabled = publicationDraft?.changes.get(id) ?? model.enabled;
-      if (!publicationDraft) publicationDraft = { revision: state.revision, changes: new Map() };
-      const next = !enabled;
-      if (next === model.enabled) publicationDraft.changes.delete(id);
-      else publicationDraft.changes.set(id, next);
-      if (!publicationDraft.changes.size) publicationDraft = undefined;
-      publicationError = '';
-      catalogNotice = '';
-      rememberPublication();
-      render();
+      if (action === 'publish-model') changeModelSettings(model, { enabled: !draftModelSettings(model).enabled });
+      else if (action === 'reset-model-efforts') changeModelSettings(model, { reasoningPolicy: null });
+      else changeModelEffort(model, button.dataset.level, action === 'pin-model-effort');
     }
-    if (action === 'save-publication' && publicationDraft) {
-      const { revision, changes } = publicationDraft;
-      const models = state.models.map(model => ({ id: model.id, enabled: changes.get(model.id) ?? model.enabled }));
-      button.disabled = true;
-      await mutate('/admin/model-settings', 'PATCH', { models }, revision);
-      publicationDraft = undefined;
-      publicationError = '';
+    if (action === 'save-publication' && settingsDraft) {
+      const { revision, changes } = settingsDraft;
+      const models = state.models.map(model => ({ id: model.id, enabled: model.enabled, ...changes.get(model.id) }));
+      const saving = mutate('/admin/model-settings', 'PATCH', { models }, revision);
+      render();
+      await saving;
+      settingsDraft = undefined;
+      settingsError = '';
       catalogNotice = '全部更改已保存';
-      rememberPublication();
+      rememberSettings();
       render();
     }
     if (action === 'add-key') {
@@ -655,7 +747,10 @@ document.addEventListener('click', async event => {
     if (action === 'stop') generation?.abort();
     if (action === 'cancel-request') { await api(`/admin/requests/${id}/cancel`, { method: 'POST', body: {} }); await load(); toast('已发送取消请求。'); }
   } catch (error) {
-    if (action === 'save-publication') publicationError = `${error.message} 未保存的发布更改已保留。`;
+    if (action === 'save-publication') {
+      const message = error.code === 'reasoning_policy_conflict' ? '有旧别名或分组仍在使用被关闭的思考深度。请保留该深度后再保存。' : error.message;
+      settingsError = `${message} 未保存的更改已保留。`;
+    }
     toast(error.message, true);
     if (['discover', 'save-publication'].includes(action)) render();
   }
@@ -669,7 +764,7 @@ const refreshTimer = setInterval(async () => {
   try {
     const next = await api('/admin/state');
     if (currentToken !== token || busy || catalogRefresh || generation || $('#dialog').open || view === 'playground' || next.revision < state.revision) return;
-    const changed = next.revision !== state.revision;
+    const changed = next.revision !== state.revision || view === 'models' && next.requests[0]?.id !== state.requests[0]?.id;
     state = next;
     if (changed) render();
   } catch {}

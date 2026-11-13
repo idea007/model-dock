@@ -1,14 +1,26 @@
 import { sse } from '../protocol/events.mjs';
 import { fetchUpstream, jsonResponse, usage, headers, protocolError } from './http.mjs';
 
+const tokenLimit = value => Number.isSafeInteger(value) && value > 0 ? value : null;
+const effortName = value => typeof value === 'string' && value.length > 0 && value.length <= 30 && value.trim() === value && !/[\u0000-\u001f]/u.test(value);
+
 export const openai = {
   async discover(connection, { secret, signal }) {
     const result = await jsonResponse(await fetchUpstream(`${connection.baseUrl}/models`, { headers: headers(secret), signal }));
     if (!Array.isArray(result.data)) throw protocolError();
-    return result.data.slice(0, 1000).filter(model => typeof model.id === 'string' && model.id.length <= 300).map(model => ({
-      nativeId: model.id, name: model.id, capabilities: { text: null, tools: null, structured: null },
-      details: 'Provider model listing does not declare capabilities. Verify them with a test request.'
-    }));
+    return result.data.slice(0, 1000).filter(model => typeof model?.id === 'string' && model.id.length <= 300).map(model => {
+      const levels = Array.isArray(model.reasoning_efforts) ? [...new Set(model.reasoning_efforts.filter(effortName))] : [];
+      return {
+        nativeId: model.id, name: model.id,
+        capabilities: Object.fromEntries(['text', 'tools', 'structured', 'thinking'].map(key => [key, typeof model.capabilities?.[key] === 'boolean' ? model.capabilities[key] : null])),
+        maxInputTokens: tokenLimit(model.max_input_tokens),
+        maxOutputTokens: tokenLimit(model.max_output_tokens),
+        contextWindow: tokenLimit(model.context_window),
+        reasoningEfforts: levels,
+        defaultEffort: levels.includes(model.default_reasoning_effort) ? model.default_reasoning_effort : null,
+        details: 'Capabilities depend on the provider model listing.'
+      };
+    });
   },
   async *generate(connection, request, { secret, signal }) {
     const response = await fetchUpstream(`${connection.baseUrl}/chat/completions`, {

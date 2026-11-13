@@ -22,7 +22,12 @@ test('server publishes resources atomically, refuses application settings, and s
   assert.equal((await app.mutate('/admin/model-settings', 'PATCH', { models })).status, 200);
   const before = app.store.read();
   assert.equal((await app.request('/admin/model-settings', 'PATCH', { models, revision })).status, 409);
-  for (const input of [{ models: [{ ...models[0], enabled: false }, { ...models[1], enabled: 'yes' }] }, { models, routes: [] }, { models: models.map(model => ({ ...model, reasoningPolicy: null })) }]) {
+  for (const input of [
+    { models: [{ ...models[0], enabled: false }, { ...models[1], enabled: 'yes' }] },
+    { models, routes: [] },
+    { models: [models[0], { ...models[1], groupPolicies: {} }] },
+    { models: [{ ...models[0], enabled: false }, { ...models[1], reasoningPolicy: { allowedEfforts: ['high'], defaultEffort: 'low' } }] }
+  ]) {
     assert.equal((await app.mutate('/admin/model-settings', 'PATCH', input)).status, 400);
     assert.deepEqual(app.store.read(), before, 'failed validation never partially publishes models');
   }
@@ -35,6 +40,28 @@ test('server publishes resources atomically, refuses application settings, and s
   for (const secret of ['fixture-upstream', 'baseUrl', 'must-not-leak', app.admin, key]) assert.ok(!JSON.stringify(catalog).includes(secret));
   assert.equal((await app.request('/v1/chat/completions', 'POST', chat(models[1].id), key)).status, 403);
   assert.equal((await app.mutate('/admin/routes', 'POST', { id: 'feature', modelId: models[0].id })).status, 410);
+});
+
+test('server model reasoning settings constrain the authorized catalog and new calls until reset', async t => {
+  const app = await setup(t, fixture());
+  const connection = await app.connection('openai', 'http://127.0.0.1:9/v1');
+  const models = app.store.read().models.map(model => ({ id: model.id, enabled: true }));
+  const [alpha, beta] = models;
+  const reasoningPolicy = { allowedEfforts: ['low', 'high'], defaultEffort: 'high' };
+  assert.equal((await app.mutate('/admin/model-settings', 'PATCH', { models: [{ ...alpha, reasoningPolicy }, beta] })).status, 200);
+  await app.mutate(`/admin/connections/${connection}/discover`, 'POST');
+  assert.equal((await app.mutate('/admin/model-settings', 'PATCH', { models })).status, 200);
+  assert.deepEqual(app.store.read().models[0].reasoningPolicy, reasoningPolicy, 'refresh and enable-only writes preserve policy');
+  const key = (await app.mutate('/admin/keys', 'POST', { name: 'only alpha', models: [alpha.id] })).data.token;
+  const [entry] = (await app.request('/v1/models', 'GET', undefined, key)).data.data;
+  assert.deepEqual(entry.reasoning_efforts, ['low', 'high']);
+  assert.equal(entry.default_reasoning_effort, 'high');
+  const invoke = effort => app.request('/v1/chat/completions', 'POST', { ...chat(alpha.id), ...(effort ? { reasoning_effort: effort } : {}) }, key);
+  assert.equal((await invoke()).data.choices[0].message.content, 'high');
+  assert.equal((await invoke('low')).data.choices[0].message.content, 'low');
+  assert.equal((await invoke('medium')).data.error.code, 'reasoning_effort_disabled');
+  assert.equal((await app.mutate('/admin/model-settings', 'PATCH', { models: [{ ...alpha, reasoningPolicy: null }, beta] })).status, 200);
+  assert.equal((await invoke()).data.choices[0].message.content, 'provider-default');
 });
 
 test('legacy aliases and reasoning preferences continue to enforce saved choices without fallback', async t => {
@@ -50,6 +77,13 @@ test('legacy aliases and reasoning preferences continue to enforce saved choices
   assert.equal((await app.request('/v1/chat/completions', 'POST', chat(first))).data.choices[0].message.content, 'medium');
   assert.equal((await app.request('/v1/chat/completions', 'POST', { ...chat('chat-default'), reasoning_effort: 'high' }, key)).data.error.code, 'reasoning_effort_disabled');
   assert.equal((await app.request('/v1/models', 'GET', undefined, key)).data.data[0].legacy_alias, true);
+  const before = app.store.read();
+  const models = before.models.map(({ id, enabled }) => ({ id, enabled }));
+  models[0].reasoningPolicy = { allowedEfforts: ['medium', 'high'], defaultEffort: 'medium' };
+  const conflict = await app.mutate('/admin/model-settings', 'PATCH', { models });
+  assert.equal(conflict.status, 409);
+  assert.equal(conflict.data.error.code, 'reasoning_policy_conflict');
+  assert.deepEqual(app.store.read(), before);
   data.runtime.levels = ['high'];
   await app.mutate(`/admin/connections/${connection}/discover`, 'POST');
   assert.equal((await app.request('/v1/chat/completions', 'POST', chat('chat-default'), key)).data.error.code, 'reasoning_policy_unavailable');

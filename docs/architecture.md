@@ -69,7 +69,7 @@ The demo has a separate private directory, session token, single-writer lock and
 
 ## Compatibility and schema v2
 
-Server `/admin/model-settings` now accepts publication flags only: complete `{id, enabled}` model rows. Application routes, groups and reasoning preferences are rejected there. New global business aliases are rejected by `POST /admin/routes` with `410 client_owned_settings`; existing aliases, scopes and saved policies remain compatible. The administrator state API lists these aliases, and the administrator API supports deletion.
+Server `/admin/model-settings` accepts publication flags and optional per-model reasoning policies. Model policies define the levels that clients can select and the default applied when a request omits a level. Clients manage application functions, groups and their reasoning preferences. `POST /admin/routes` returns `410 client_owned_settings`. Existing aliases retain their scopes and policies. Administrators can inspect and delete aliases through the management API.
 
 Schema v2 preserves optional legacy model `reasoningPolicy`/`groupPolicies` and route `group`/`reasoningPolicy`. On the first open of a valid v1 directory, the store verifies its private identity, writes a private `state.v1.<id>.backup.json`, then atomically writes v2 with an incremented revision. Existing connections, encrypted secrets, keys, publication flags and alias targets are retained. Migration introduces no access grants. Unsupported or damaged schemas fail closed; restore a complete matching directory backup before using an older binary.
 

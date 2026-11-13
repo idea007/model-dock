@@ -23,16 +23,33 @@ export function routeReasoning(model, route) {
   return route?.reasoningPolicy || groupPolicy(model, routeGroup(route || {})) || modelReasoning(model);
 }
 
-// Server settings publish resources. Application functions and preferences live in clients.
+// Application functions and preferences live in clients.
 export function saveModelSettings(state, input) {
   exact(input, ['revision', 'models']);
-  if (!Array.isArray(input.models) || input.models.length !== state.models.length) throw new GatewayError('Submit the complete model publication settings.');
+  if (!Array.isArray(input.models) || input.models.length !== state.models.length) throw new GatewayError('Submit the complete model settings.');
   const seen = new Set();
   for (const row of input.models) {
-    exact(row, ['id', 'enabled']);
+    exact(row, ['id', 'enabled', 'reasoningPolicy']);
     const model = state.models.find(item => item.id === row.id);
-    if (!model || seen.has(row.id) || typeof row.enabled !== 'boolean') throw new GatewayError('Invalid or duplicate model publication settings.');
-    seen.add(row.id); model.enabled = row.enabled;
+    if (!model || seen.has(row.id) || typeof row.enabled !== 'boolean') throw new GatewayError('Invalid or duplicate model settings.');
+    seen.add(row.id);
+    model.enabled = row.enabled;
+    if (!Object.hasOwn(row, 'reasoningPolicy')) continue;
+
+    const declared = supportedEfforts(model);
+    const policy = validateReasoningPolicy(row.reasoningPolicy, declared);
+    const previous = model.reasoningPolicy?.allowedEfforts || declared;
+    const next = policy?.allowedEfforts || declared;
+    const removed = declared.filter(level => previous.includes(level) && !next.includes(level));
+    if (removed.length) {
+      const aliases = state.routes.filter(route => route.modelId === model.id).map(route => route.reasoningPolicy);
+      const legacyPolicies = [...Object.values(model.groupPolicies || {}), ...aliases];
+      if (legacyPolicies.some(legacy => Array.isArray(legacy?.allowedEfforts) && legacy.allowedEfforts.some(level => removed.includes(level)))) {
+        throw new GatewayError('A legacy alias or group uses one of the removed reasoning levels.', 409, 'reasoning_policy_conflict');
+      }
+    }
+    if (policy) model.reasoningPolicy = policy;
+    else delete model.reasoningPolicy;
   }
 }
 

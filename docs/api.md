@@ -22,7 +22,7 @@ All configuration mutations require the latest integer `revision`. A stale revis
 | POST | `/admin/connections/:id/discover` | none; checks metadata only, no generation |
 | POST | `/admin/models` | connectionId, nativeId, name?; manual registration for API sources |
 | PATCH | `/admin/models/:encodedId` | enabled |
-| PATCH | `/admin/model-settings` | complete models array of {id, enabled}; atomic publication only |
+| PATCH | `/admin/model-settings` | complete `models` array of `{id, enabled, reasoningPolicy?}` |
 | POST | `/admin/routes` | returns 410 client_owned_settings; new functions belong to clients |
 | DELETE | `/admin/routes/:id` | none |
 | POST | `/admin/keys` | name, models: array of permitted IDs/aliases, or `["*"]` for all enabled models including future ones |
@@ -45,6 +45,6 @@ The optional fields extend the standard model-list shape; model IDs remain conne
 
 ## Atomic model publication
 
-`PATCH /admin/model-settings` is administrator-only and requires the latest `revision`. `models` must contain every catalog model exactly once as `{id, enabled}`. Application functions, routes, group policies and reasoning preferences are rejected. Validation and persistence are atomic; a stale revision returns `409 revision_conflict` without partial writes.
+`PATCH /admin/model-settings` is administrator-only and requires the latest `revision`. `models` must contain every catalog model exactly once with `id` and `enabled`. An optional `reasoningPolicy: {allowedEfforts, defaultEffort}` limits a model to declared reasoning levels. Select at least one level and choose the default from that selection. Omitting the field retains the saved policy. `null` restores provider behavior. Removing a level used by a saved legacy alias or group returns `409 reasoning_policy_conflict`. Validation and persistence are atomic. A stale revision returns `409 revision_conflict`.
 
 Existing legacy aliases and reasoning policies continue to work with their existing scopes. The new consuming-app API is in [client-demo.md](client-demo.md#demo-local-api); those routes run in the separate demo process and cannot alter server publication or project grants.

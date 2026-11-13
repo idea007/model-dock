@@ -7,11 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startGateway } from '../apps/gateway/server.mjs';
 
-export async function fixtureUpstream(t) {
+export async function fixtureUpstream(t, models = [{ id: 'shared' }, { id: 'slow' }, { id: 'broken' }]) {
   const calls = []; let disconnects = 0;
   const server = http.createServer(async (request, response) => {
     const send = value => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
-    if (request.url === '/v1/models') return send({ data: [{ id: 'shared' }, { id: 'slow' }, { id: 'broken' }] });
+    if (request.url === '/v1/models') return send({ data: models });
     if (request.url === '/api/tags') return send({ models: [{ name: 'local:small', size: 1024, details: { parameter_size: '1B', quantization_level: 'Q4' } }, { name: 'embed:small' }] });
     let body = ''; for await (const chunk of request) body += chunk;
     let value; try { value = JSON.parse(body || '{}'); } catch { response.writeHead(400); response.end(); return; }

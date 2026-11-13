@@ -24,7 +24,7 @@ The console runs at **http://127.0.0.1:4317** by default. The API base URL is **
 The console currently uses Chinese labels:
 
 1. Add a provider under **Connections & credentials** (`连接与凭证`), then click **Discover models** (`发现模型`).
-2. Publish models under **Models & services** (`模型与服务`). Newly discovered models are unpublished by default. Use **Save changes** to apply publication switches.
+2. Enable models under **Models & services** (`模型与服务`). For models that declare reasoning levels, select the open levels and pin the default. Use **Save changes** to publish the settings. Newly discovered models are unpublished by default.
 3. Create a scoped key under **Project access** (`项目访问`) and select the models the app may use.
 4. Verify a real request in the **Playground** (`调用测试`), then give your app the gateway URL, project key and connection-qualified model ID.
 

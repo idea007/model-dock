@@ -28,6 +28,6 @@ Limits: 2 MiB request body, 8 MiB generated data, 2048 messages, 128 function de
 
 Codex is experimental because history injection and dynamic tools use its experimental API. The initial implementation was checked against a locally installed `codex-cli 0.164.0`. Fixtures validate the JSON-RPC contract, but each new CLI version still needs a real protocol smoke test. Listing models does not prove account entitlements. Native errors are mapped to fixed error codes; stderr, host paths and account details are not forwarded.
 
-The provider catalog does not infer capabilities from names. OpenAI `/models` often does not supply capability metadata, so entries are explicitly unknown. Ollama uses `/api/show`; embedding-only entries are excluded from this text release. Displayed context metadata is not a tokenizer guarantee and is not used to maximize memory allocation.
+The OpenAI-compatible adapter can read optional `/models` metadata from `capabilities`, `reasoning_efforts`, `default_reasoning_effort`, `context_window`, `max_input_tokens`, and `max_output_tokens`. Missing capabilities and limits stay unknown. Ollama uses `/api/show` and filters out embedding-only entries. Displayed context limits are informational. Ollama's configured context determines memory allocation.
 
 References: [Ollama compatibility](https://docs.ollama.com/api/openai-compatibility), [Codex App Server](https://learn.chatgpt.com/docs/app-server).
