@@ -38,11 +38,12 @@ test('same-name models stay isolated; aliases, scoped keys, revision conflicts a
   const upstream = await fixtureUpstream(t), app = await setup(t);
   const a = await app.connection('openai', `${upstream.origin}/v1`), b = await app.connection('openai', `${upstream.origin}/v1`);
   await app.enable(`${a}/shared`); await app.enable(`${b}/shared`);
-  await app.mutate('/admin/routes', 'POST', { id: 'chat-default', name: '聊天', modelId: `${a}/shared` });
+  // Seed an existing alias; new business aliases are client-owned.
+  await app.gateway.saveRoute({ revision: app.store.read().revision, id: 'chat-default', name: '聊天', modelId: `${a}/shared` });
   const key = (await app.mutate('/admin/keys', 'POST', { name: 'demo', models: ['chat-default'] })).data.token;
   assert.deepEqual((await app.request('/v1/models', 'GET', undefined, key)).data.data.map(item => item.id), ['chat-default']);
   assert.equal((await app.request('/v1/chat/completions', 'POST', { model: `${b}/shared`, messages }, key)).status, 403);
-  assert.equal((await app.request('/admin/routes', 'POST', { revision: 0, id: 'bad', modelId: `${b}/shared` })).status, 409);
+  assert.equal((await app.request('/admin/routes', 'POST', { revision: 0, id: 'bad', modelId: `${b}/shared` })).status, 410);
   const result = await app.request('/v1/chat/completions', 'POST', { model: 'chat-default', messages }, key);
   assert.equal(result.status, 200); assert.equal(result.data.model, 'chat-default');
   await app.mutate(`/admin/models/${encodeURIComponent(`${a}/shared`)}`, 'PATCH', { enabled: false });

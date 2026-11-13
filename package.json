@@ -1,7 +1,7 @@
 {
   "name": "lab-model-dock",
   "version": "0.1.0",
-  "description": "A local-first AI gateway for your APIs, Ollama and Codex, with model management.",
+  "description": "A local-first model gateway with a separate client application demo.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/idea007/model-dock.git"
@@ -16,7 +16,8 @@
     "node": ">=22.12"
   },
   "bin": {
-    "model-dock": "apps/gateway/cli.mjs"
+    "model-dock": "apps/gateway/cli.mjs",
+    "model-dock-demo": "apps/demo/cli.mjs"
   },
   "workspaces": [
     "apps/*",
@@ -39,7 +40,9 @@
     "check": "node scripts/check.mjs",
     "test": "node --test",
     "verify": "npm run check && npm test",
-    "pack:check": "node scripts/pack-smoke.mjs"
+    "pack:check": "node scripts/pack-smoke.mjs",
+    "demo": "node apps/demo/cli.mjs",
+    "demo:mock": "node apps/demo/cli.mjs --mock"
   },
   "devDependencies": {
     "jsdom": "27.4.0",

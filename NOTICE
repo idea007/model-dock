@@ -16,3 +16,10 @@ frontend template, model weights or third-party runtime binaries are distributed
 Codex, Ollama and model/provider names identify separate third-party products.
 Their licenses, account conditions and service policies apply independently.
 This project is not endorsed by those providers.
+
+The model-management layout and interaction patterns are also adapted from
+client/components/admin/PersonalModelCapabilityManager.js and the associated
+model-capability controls, views and styles in the same source project. The
+independent client-demo implementation owns standalone/grouped application
+features, model choices and reasoning preferences. The server console owns
+model supply, publication and project authorization.

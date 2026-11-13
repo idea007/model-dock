@@ -2,9 +2,9 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**Your models. Connected.** A local-first AI gateway and model management console.
+**Your models. Connected.** A local-first model gateway with a separate client demo.
 
-Connect your own model APIs, Ollama, and a signed-in Codex CLI through a single endpoint. Apps can call a model by its ID or an alias. The gateway and console have no third-party runtime dependencies; the core, protocols, and provider adapters are maintained in this repository.
+Connect your own model APIs, Ollama, and a signed-in Codex CLI through a single endpoint. The server owns model supply, credentials, publication, project access and request controls. Consuming apps own their features, groups and model preferences. The gateway, console and demo have no third-party runtime dependencies; the core, protocols, and provider adapters are maintained in this repository.
 
 ## Quick start
 
@@ -24,18 +24,36 @@ The console runs at **http://127.0.0.1:4317** by default. The API base URL is **
 The console currently uses Chinese labels:
 
 1. Add a provider under **Connections & credentials** (`连接与凭证`), then click **Discover models** (`发现模型`).
-2. Enable the models you need under **Functions & models** (`功能与模型`). Newly discovered models are disabled by default.
-3. Optionally, add aliases such as `chat-default` or `summarize` and bind them to specific models.
-4. Create a key for your demo under **Project access** (`项目访问`) and select the models or aliases it may use.
-5. Verify a request in the **Playground** (`调用测试`), then configure your app with the gateway URL, project key, and model ID or alias.
+2. Publish models under **Models & services** (`模型与服务`). Newly discovered models are unpublished by default. Use **Save changes** to apply publication switches.
+3. Create a scoped key under **Project access** (`项目访问`) and select the models the app may use.
+4. Verify a real request in the **Playground** (`调用测试`), then give your app the gateway URL, project key and connection-qualified model ID.
 
-To try the gateway without a model account, run `node examples/mock-server.mjs` and follow its terminal instructions to add a clearly labeled test upstream. It returns fixed test content without calling a real model.
+## Try the independent client demo
+
+```sh
+# No model account needed; uses an isolated simulated gateway
+npm run demo:mock -- --open
+# Or connect the demo to your running Model Dock with a project key
+npm run demo -- --open
+```
+
+The client demo runs at **http://127.0.0.1:4318** in a separate process and data directory. It includes standalone conversation/extraction, content and development groups, single-model and multiple-candidate choices, independent defaults, reasoning inheritance, and a streaming runner.
+
+**Functions & models** (`功能与模型`) has moved here. Its credential/function views, search, expandable groups, resizable columns, save/revert controls and recoverable drafts affect only this application. The app backend reads authorized models and forwards requests using a project key; it never uses administrator APIs. Mock mode is explicitly labeled and never contacts real models. See the [demo setup](docs/client-demo.md) and [model preference guide](docs/model-settings.md).
+
+| Server console · 4317 | Client demo · 4318 |
+| --- | --- |
+| Provider connections and upstream secrets | Project connection and authorized catalog |
+| Model publication and project scopes | App model choices, feature groups and defaults |
+| Capacity, timeout, revocation and request metadata | Prompt templates, per-feature reasoning and user interactions |
+
+Existing server aliases remain compatible with existing keys and calls. New application functions belong in clients; the gateway no longer creates global business aliases.
 
 ## Connect your app
 
 ```sh
 export MODEL_DOCK_API_KEY='your-project-key-from-the-console'
-export MODEL_DOCK_MODEL='chat-default'
+export MODEL_DOCK_MODEL='connection-id/model-id'
 node examples/chat.mjs
 ```
 
@@ -49,7 +67,7 @@ const client = new OpenAI({
   apiKey: process.env.MODEL_DOCK_API_KEY,
 });
 const result = await client.chat.completions.create({
-  model: 'chat-default',
+  model: 'connection-id/model-id',
   messages: [{ role: 'user', content: 'Hello' }],
 });
 console.log(result.choices[0].message.content);
@@ -61,7 +79,7 @@ See the [plain JavaScript example](examples/chat.mjs), [Python SDK example](exam
 
 | Source | Connection | Capabilities |
 | --- | --- | --- |
-| Your own API | OpenAI-compatible base URL + API key | Multiple connections, model discovery or manual registration, enable/disable controls, aliases, and project access scopes |
+| Your own API | OpenAI-compatible base URL + API key | Multiple connections, model discovery or manual registration, publication controls and project access scopes |
 | Ollama | Native local HTTP API | Installed-model discovery, capability and context metadata, text inference, streaming, JSON, and model-supported tool calls |
 | Codex (experimental) | Locally installed and signed-in CLI / App Server | Model catalog, reasoning effort levels, text, streaming, JSON, application tool calls, and cancellation |
 
@@ -79,7 +97,7 @@ Built-in Codex authentication has a different scope from hosted services. For co
 - `POST /v1/chat/completions`: text messages, non-streaming JSON, SSE, tool calls, and tool-result round trips.
 - Token usage as reported by the upstream. Missing usage stays unknown rather than being fabricated as zero.
 - Client disconnects and cancellation, request timeouts, concurrency limits, and project-key revocation.
-- Management APIs for connections, catalogs, model enablement, aliases, project keys, and cancellation of in-flight requests.
+- Management APIs for connections, catalogs, model publication, project keys, and cancellation of in-flight requests.
 
 **Compatibility is limited to an explicit subset.** Unsupported parameters return errors. Codex cannot guarantee the semantics of options such as `temperature` or `max_tokens`, so it does not silently accept and ignore them. See the [compatibility matrix](docs/compatibility.md) and [management API documentation](docs/api.md).
 
@@ -89,7 +107,7 @@ The initial release does not include the Responses API, image/audio/video suppor
 
 Data is stored in the current user's `~/.model-dock` by default. Set `MODEL_DOCK_HOME` to use a dedicated directory. Only one gateway process may write to a directory at a time.
 
-- `state.json`: connections, models, aliases, hashed project keys, and upstream keys encrypted with AES-256-GCM.
+- `state.json`: connections, models, compatible legacy aliases, hashed project keys, and upstream keys encrypted with AES-256-GCM.
 - `master.key`: the decryption key. `admin.token`: the local administrator token.
 - POSIX file permissions are `0600`, and directory permissions are `0700`. On Windows, use a directory private to the current user and configure the corresponding ACLs.
 - Atomic writes and revision checks prevent concurrent overwrites. Reading a corrupted configuration does not reset it.
@@ -118,6 +136,7 @@ Install a locally built package:
 ```sh
 npm install --global ./lab-model-dock-0.1.0.tgz
 model-dock serve --open
+model-dock-demo --mock --open
 ```
 
 Source repository: [idea007/model-dock](https://github.com/idea007/model-dock). The npm package name is `lab-model-dock`; it has not been published to npm. The installation command above uses a locally generated tarball. Building does not require the original blog repository, its database, or its environment files.
@@ -128,7 +147,8 @@ See the [verification record](docs/verification.md) for the initial test results
 
 ```text
 apps/gateway/       CLI, HTTP, and static asset entry points
-apps/console/       Console with no build step
+apps/console/       Server management console with no build step
+apps/demo/          Independent consuming app, private settings, UI and mock mode
 packages/core/      Persistence, authorization, catalogs, routing, and request controls
 packages/protocol/  Validation, errors, and streaming protocol
 packages/providers/ OpenAI-compatible, Ollama, and Codex adapters

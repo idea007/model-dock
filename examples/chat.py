@@ -1,4 +1,4 @@
-"""pip install openai; set MODEL_DOCK_API_KEY and optionally MODEL_DOCK_MODEL."""
+"""pip install openai; set MODEL_DOCK_API_KEY and MODEL_DOCK_MODEL."""
 import os
 from openai import OpenAI
 
@@ -8,7 +8,7 @@ client = OpenAI(
     max_retries=0,
 )
 stream = client.chat.completions.create(
-    model=os.environ.get("MODEL_DOCK_MODEL", "chat-default"),
+    model=os.environ["MODEL_DOCK_MODEL"],
     messages=[{"role": "user", "content": "你好，请用一句话介绍自己。"}],
     stream=True,
 )

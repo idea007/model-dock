@@ -4,7 +4,8 @@
 
 - One installable Node package; separate core/protocol/providers/console modules.
 - API, Ollama and Codex adapters; JSON and SSE Chat Completions.
-- Credential management, model discovery/manual registration, enablement, stable feature aliases.
+- Credential management, model discovery/manual registration, publication and compatibility for existing aliases.
+- Independent client demo for standalone/grouped features, explicit model defaults and reasoning preferences.
 - Scoped project keys, cancellation, capacity limits and bounded metadata.
 - Offline fixtures, official SDK contract tests, packaging verification, local setup and integration examples.
 

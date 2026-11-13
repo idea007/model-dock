@@ -18,9 +18,17 @@ The initial Codex call spent time reconnecting its WebSocket transport before fa
 
 ## Remaining verification boundaries
 
-- The browser-control service was unavailable, so visual browser inspection was not completed. DOM tests do not substitute for visual review or a full accessibility audit.
+- The initial browser-control service was unavailable. The later server/client split was inspected with headless Chrome on desktop and mobile viewports; a full accessibility audit remains outstanding.
 - CI is configured for Linux, macOS and Windows with Node 22/24; those remote matrix jobs have not been run for this initial local delivery.
 - The generic API adapter was tested against controlled HTTP fixtures, not a user's paid third-party API account.
 - Codex compatibility is experimental and version-dependent. A new CLI release needs its own real protocol smoke test.
 
 Reproduce the offline and packaging checks with `npm ci`, `npm run verify`, and `npm run pack:check`. Real inference is opt-in through the console and uses the selected connection's resources.
+
+## Server/client separation follow-up
+
+The same macOS / Node environment passed `npm run verify`: **38 modules** checked and **23 tests** passed. New checks cover server publication-only mutations, project-scoped capability metadata, retained legacy aliases, independent client persistence, single/multiple selections, explicit defaults, reasoning inheritance, revision conflicts, revoked credentials, model unavailability and cancellation across both processes.
+
+Headless Chrome exercised the complete client UI using isolated simulated providers: multiline inputs, JSON and SSE, grouped defaults, per-feature reasoning, feature creation, draft recovery after reload, rejection of administrator credentials, and the server's publication controls. Desktop (1600 × 1020) and mobile (390 × 844) layouts were visually inspected, including horizontal scrolling confined to the model table. No browser JavaScript errors were observed. The client made no management API calls.
+
+`npm run pack:check` installed the tarball outside the source tree and checked both CLIs, all server/client assets, and a simulated client → gateway inference. This follow-up did not call real or paid models. The local gateway was restarted with no active requests; its state file, administrator token and master key were byte-for-byte unchanged. The independent mock demo was started on port 4318.

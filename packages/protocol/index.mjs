@@ -1,5 +1,5 @@
 export const VERSION = '0.1.0';
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export class GatewayError extends Error {
   constructor(message, status = 400, code = 'invalid_request', param = null) {
     super(message); this.name = 'GatewayError'; this.status = status; this.code = code; this.param = param;

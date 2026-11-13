@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 import { Store, newId } from '../../packages/core/store.mjs';
 import { Gateway } from '../../packages/core/gateway.mjs';
+import { assertLoopbackRequest } from '../../packages/protocol/loopback.mjs';
 import { GatewayError, VERSION, errorPayload, exact, object } from '../../packages/protocol/index.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -12,6 +13,7 @@ const staticFiles = new Map([
   ['/', [path.join(directory, '../console/index.html'), 'text/html; charset=utf-8']],
   ['/assets/app.mjs', [path.join(directory, '../console/app.mjs'), 'text/javascript; charset=utf-8']],
   ['/assets/style.css', [path.join(directory, '../console/style.css'), 'text/css; charset=utf-8']],
+  ['/assets/models.css', [path.join(directory, '../console/models.css'), 'text/css; charset=utf-8']],
   ['/assets/events.mjs', [path.join(directory, '../../packages/protocol/events.mjs'), 'text/javascript; charset=utf-8']]
 ]);
 function json(response, status, value) {
@@ -113,13 +115,9 @@ export async function startGateway(options) {
     const abort = () => { if (!response.writableEnded) controller.abort(new GatewayError('Client disconnected.', 499, 'request_cancelled')); };
     request.once('aborted', abort); response.once('close', abort);
     try {
-      const host = request.headers.host;
-      const port = server.address().port;
-      const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
-      if (!hosts.includes(host)) throw new GatewayError('This gateway accepts loopback hosts only.', 403, 'host_forbidden');
-      if (request.headers.origin && request.headers.origin !== `http://${host}`) throw new GatewayError('Cross-origin requests are not allowed.', 403, 'origin_forbidden');
-      if (request.headers['sec-fetch-site'] === 'cross-site') throw new GatewayError('Cross-site requests are not allowed.', 403, 'origin_forbidden');
+      assertLoopbackRequest(request, server.address().port);
       const url = new URL(request.url, origin), pathname = url.pathname;
+      if (request.method === 'GET' && pathname === '/favicon.ico') { response.writeHead(204, { 'cache-control': 'no-store' }); response.end(); return; }
       if (request.method === 'GET' && pathname === '/healthz') { json(response, 200, { ok: true, version: VERSION }); return; }
       if (request.method === 'GET' && staticFiles.has(pathname)) {
         const [file, contentType] = staticFiles.get(pathname);
@@ -141,13 +139,14 @@ export async function startGateway(options) {
         const route = pathname.match(/^\/admin\/routes\/([^/]+)$/);
         const key = pathname.match(/^\/admin\/keys\/([^/]+)$/);
         const cancel = pathname.match(/^\/admin\/requests\/([^/]+)\/cancel$/);
-        if (request.method === 'POST' && pathname === '/admin/connections') result = await gateway.saveConnection(body);
+        if (request.method === 'PATCH' && pathname === '/admin/model-settings') result = await gateway.saveModelSettings(body);
+        else if (request.method === 'POST' && pathname === '/admin/connections') result = await gateway.saveConnection(body);
         else if (connection && request.method === 'PATCH' && !connection[2]) result = await gateway.saveConnection(body, connection[1]);
         else if (connection && request.method === 'DELETE' && !connection[2]) { exact(body, ['revision']); result = await gateway.deleteConnection(connection[1], body.revision); }
         else if (connection && request.method === 'POST' && connection[2]) { exact(body, ['revision']); result = await gateway.discover(connection[1], body.revision, controller.signal); }
         else if (pathname === '/admin/models' && request.method === 'POST') result = await gateway.addModel(body);
         else if (model && request.method === 'PATCH') result = await gateway.updateModel(decodeURIComponent(model[1]), body);
-        else if (pathname === '/admin/routes' && request.method === 'POST') result = await gateway.saveRoute(body);
+        else if (pathname === '/admin/routes' && request.method === 'POST') throw new GatewayError('Configure application functions in the client. Existing aliases remain readable for compatibility.', 410, 'client_owned_settings');
         else if (route && request.method === 'DELETE') { exact(body, ['revision']); result = await gateway.deleteRoute(route[1], body.revision); }
         else if (pathname === '/admin/keys' && request.method === 'POST') result = await gateway.createKey(body);
         else if (key && request.method === 'DELETE') { exact(body, ['revision']); result = await gateway.deleteKey(key[1], body.revision); }

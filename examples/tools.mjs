@@ -2,7 +2,8 @@
 const base = process.env.MODEL_DOCK_BASE_URL || 'http://127.0.0.1:4317/v1';
 const key = process.env.MODEL_DOCK_API_KEY;
 if (!key) throw new Error('Set MODEL_DOCK_API_KEY first.');
-const model = process.env.MODEL_DOCK_MODEL || 'chat-default';
+const model = process.env.MODEL_DOCK_MODEL;
+if (!process.env.MODEL_DOCK_MODEL) throw new Error('Set MODEL_DOCK_MODEL to an authorized model ID from the catalog.');
 const messages = [{ role: 'user', content: 'Use the add function to calculate 17 + 25.' }];
 const tools = [{ type: 'function', function: { name: 'add', description: 'Add two finite numbers.', parameters: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } }, required: ['a', 'b'], additionalProperties: false } } }];
 for (let turn = 0; turn < 4; turn++) {

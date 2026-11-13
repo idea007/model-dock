@@ -1,6 +1,7 @@
 import { GatewayError, exact, string, slug, validateChat } from '../protocol/index.mjs';
 import { digest, equalSecret, newId, newToken } from './store.mjs';
 import { createProviders } from '../providers/index.mjs';
+import { saveModelSettings, applyReasoningPolicy } from './model-settings.mjs';
 
 const missing = kind => { throw new GatewayError(`${kind} not found.`, 404, 'not_found'); };
 const activeModel = (state, model) => model.enabled && model.available !== false && state.connections.some(connection => connection.id === model.connectionId && connection.enabled);
@@ -51,8 +52,17 @@ export class Gateway {
   }
   catalog(principal) {
     const state = this.store.read();
-    const models = state.models.filter(model => activeModel(state, model) && this.keyAllows(principal, model.id)).map(model => ({ id: model.id, object: 'model', created: 0, owned_by: model.connectionId }));
-    const routes = state.routes.filter(route => this.keyAllows(principal, route.id) && state.models.some(model => model.id === route.modelId && activeModel(state, model))).map(route => ({ id: route.id, object: 'model', created: 0, owned_by: 'model-dock' }));
+    const models = state.models.filter(model => activeModel(state, model) && this.keyAllows(principal, model.id)).map(model => {
+      const connection = state.connections.find(item => item.id === model.connectionId);
+      const declared = model.reasoningEfforts || [];
+      const allowed = model.reasoningPolicy?.allowedEfforts || declared;
+      return { id: model.id, object: 'model', created: 0, owned_by: model.connectionId, name: model.name,
+        source: { id: connection.id, name: connection.name, type: connection.type },
+        capabilities: Object.fromEntries(['text', 'tools', 'structured', 'thinking'].map(key => [key, typeof model.capabilities?.[key] === 'boolean' ? model.capabilities[key] : null])), context_window: model.contextWindow || null,
+        reasoning_efforts: declared.filter(level => allowed.includes(level)),
+        default_reasoning_effort: model.reasoningPolicy?.defaultEffort || model.defaultEffort || null };
+    });
+    const routes = state.routes.filter(route => this.keyAllows(principal, route.id) && state.models.some(model => model.id === route.modelId && activeModel(state, model))).map(route => ({ id: route.id, object: 'model', created: 0, owned_by: 'model-dock', legacy_alias: true }));
     return { object: 'list', data: [...routes, ...models] };
   }
   snapshot() {
@@ -139,12 +149,16 @@ export class Gateway {
     if (typeof input.enabled !== 'boolean') throw new GatewayError('enabled must be boolean.');
     return this.store.mutate(input.revision, state => { const model = state.models.find(item => item.id === id) || missing('Model'); model.enabled = input.enabled; });
   }
+  async saveModelSettings(input) {
+    return this.store.mutate(input.revision, state => saveModelSettings(state, input));
+  }
   async saveRoute(input) {
     exact(input, ['revision', 'id', 'name', 'modelId']); const id = slug(input.id);
     return this.store.mutate(input.revision, state => {
       if (!state.models.some(model => model.id === input.modelId)) missing('Model');
-      const route = { id, name: input.name ? string(input.name, 'function name') : id, modelId: input.modelId };
       const existing = state.routes.find(item => item.id === id);
+      const route = { ...existing, id, name: input.name ? string(input.name, 'function name') : id, modelId: input.modelId,
+        ...(existing && existing.modelId !== input.modelId ? { reasoningPolicy: null } : {}) };
       if (existing) state.routes[state.routes.indexOf(existing)] = route; else state.routes.push(route);
       return { id };
     });
@@ -183,6 +197,7 @@ export class Gateway {
     const state = this.store.read(), route = state.routes.find(item => item.id === body.model);
     const model = state.models.find(item => item.id === (route?.modelId || body.model));
     if (!model || !activeModel(state, model)) throw new GatewayError('The selected model is disabled or unavailable. Choose it explicitly in model management.', 404, 'model_unavailable');
+    const request = applyReasoningPolicy(model, route, body);
     const connection = state.connections.find(item => item.id === model.connectionId);
     const concurrent = [...this.active.values()].filter(row => row.connectionId === connection.id || connection.type === 'codex' && row.provider === 'codex').length;
     if (concurrent >= connection.maxConcurrency || this.active.size >= 32) throw new GatewayError('This connection is at capacity. Retry after the active request finishes.', 429, 'connection_busy');
@@ -191,7 +206,7 @@ export class Gateway {
     this.active.set(id, row); let status = 'failed', code = null, measurement = null, done = false, output = 0;
     const combined = AbortSignal.any([signal, controller.signal, AbortSignal.timeout(connection.timeoutSeconds * 1000)]);
     try {
-      for await (const event of this.providers[connection.type].generate(connection, { ...body, model: model.nativeId }, {
+      for await (const event of this.providers[connection.type].generate(connection, { ...request, model: model.nativeId }, {
         secret: this.store.decrypt(connection.secret), signal: combined, model
       })) {
         combined.throwIfAborted();

@@ -20,7 +20,7 @@ This release implements a text-only subset of OpenAI Chat Completions. It does n
 | Images/audio/video/embeddings | Not exposed | Not exposed | Not exposed |
 | Responses API / persistent conversations | Not exposed | Not exposed | Not exposed |
 
-Model aliases are resolved to a fixed connection and native model for each request. Errors never trigger an automatic retry, model fallback or credential switch in the gateway. Codex itself may reconnect or fall back from WebSockets to HTTPS within a native turn; these native attempts still count toward the configured timeout. A caller may choose its own retry policy; SDKs often enable retries by default. For explicit control, configure the OpenAI SDK with `maxRetries: 0` (JavaScript) or `max_retries=0` (Python).
+Compatible legacy model aliases are resolved to a fixed connection and native model for each request. Errors never trigger an automatic retry, model fallback or credential switch in the gateway. Codex itself may reconnect or fall back from WebSockets to HTTPS within a native turn; these native attempts still count toward the configured timeout. A caller may choose its own retry policy; SDKs often enable retries by default. For explicit control, configure the OpenAI SDK with `maxRetries: 0` (JavaScript) or `max_retries=0` (Python).
 
 Once SSE has begun, a failure is emitted as `data: {"error": ...}` and the stream closes **without** `[DONE]`. Consumers must not interpret partial text or a dropped connection as success. Normal completion ends with a finish-reason chunk, optional usage chunk (when requested and known), and `[DONE]`.
 

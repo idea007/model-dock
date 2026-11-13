@@ -3,9 +3,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
+import { GatewayError } from '../packages/protocol/index.mjs';
 import { setup, fixtureUpstream, until } from './helpers.mjs';
 
-test('console: login, connection discovery, model enablement, aliases, scoped key and JSON/SSE playground', async t => {
+test('console: login, connection discovery, model publication, scoped key and JSON/SSE playground', async t => {
   const upstream = await fixtureUpstream(t), app = await setup(t);
   const html = await fs.readFile(new URL('../apps/console/index.html', import.meta.url), 'utf8');
   const dom = new JSDOM(html, { url: app.origin });
@@ -35,7 +36,7 @@ test('console: login, connection discovery, model enablement, aliases, scoped ke
   await until(() => document.querySelector('#login-form .form-error')?.textContent.includes('valid access token'));
   fill('token', app.admin); submit('#login-form');
   await until(() => document.querySelector('.shell'));
-  assert.match(document.querySelector('h1').textContent, /各就各位/);
+  assert.match(document.querySelector('h1').textContent, /模型服务/);
   click('[data-action="add-connection"][data-type="openai"]');
   fill('name', '测试 API'); fill('baseUrl', `${upstream.origin}/v1`); fill('apiKey', 'fixture-upstream'); submit('#modal-form');
   await modalDone();
@@ -43,22 +44,68 @@ test('console: login, connection discovery, model enablement, aliases, scoped ke
   click('.connection-card [data-action="discover"]');
   await until(() => app.store.read().models.length === 3 && !document.querySelector('.connection-card [data-action="discover"]').disabled);
   click('[data-view="models"]');
+  assert.match(document.querySelector('h1').textContent, /模型与服务/);
+  assert.equal(document.querySelectorAll('.catalog-group').length, 1);
+  const categoryButtons = () => [...document.querySelectorAll('.catalog-filters button')];
+  assert.deepEqual(categoryButtons().map(button => button.textContent), ['全部', '文本与理解', '图片生成', '视频生成', '语音识别', '语音合成']);
+  click('[data-action="catalog-filter"][data-value="image_generation"]');
+  assert.match(document.querySelector('#catalog-table').textContent, /暂无图片生成模型/);
+  assert.equal(document.querySelectorAll('.catalog-model').length, 0);
+  click('[data-action="catalog-filter"][data-value="content_ai"]');
+  assert.equal(document.querySelectorAll('.catalog-model').length, 3);
   const model = app.store.read().models.find(item => item.nativeId === 'shared');
-  click(`[data-action="toggle-model"][data-id="${model.id}"]`);
-  await until(() => document.querySelector(`[data-id="${model.id}"]`).getAttribute('aria-checked') === 'true');
-  click('[data-action="add-route"]'); fill('name', '聊天'); fill('id', 'chat-default'); fill('modelId', model.id); submit('#modal-form');
-  await modalDone();
-  click('[data-model-view="functions"]'); assert.match(document.querySelector('#model-list').textContent, /chat-default/);
+  assert.equal(document.querySelector('[data-action="add-route"]'), null, 'business features have moved out of the server console');
+  const publish = `[data-action="publish-model"][data-id="${model.id}"]`;
+  click(publish);
+  assert.equal(document.querySelector(publish).getAttribute('aria-checked'), 'true');
+  assert.equal(app.store.read().models.find(row => row.id === model.id).enabled, false, 'publication changes wait for save');
+  assert.match(document.querySelector('.catalog-runtime').textContent, /API 连接正常/);
+  const check = '[data-action="check-connection"]';
+  const refresh = '[data-action="refresh-catalog"]';
+  const provider = app.gateway.providers.openai;
+  const pendingCheck = Promise.withResolvers();
+  let checks = 0;
+  app.gateway.providers.openai = {
+    ...provider,
+    async discover(...args) {
+      checks++;
+      if (checks === 1) {
+        await pendingCheck.promise;
+        throw new GatewayError('Fixture rejected the catalog request.', 502, 'upstream_auth_failed');
+      }
+      return provider.discover(...args);
+    }
+  };
+  click(check);
+  assert.equal(document.querySelector(check).getAttribute('aria-busy'), 'true');
+  assert.equal(document.querySelector(check).disabled, true);
+  assert.equal(document.querySelector(refresh).disabled, true);
+  assert.match(document.querySelector('.catalog-runtime').textContent, /正在检测/);
+  pendingCheck.resolve();
+  await until(() => document.querySelector('.catalog-runtime')?.dataset.status === 'error');
+  assert.match(document.querySelector('.catalog-runtime-error').textContent, /API 密钥/);
+  assert.equal(document.querySelectorAll('.catalog-model').length, 3, 'a failed check keeps the catalog');
+  assert.equal(document.querySelector('[data-action="save-publication"]').disabled, false);
+  assert.match(document.querySelector(refresh).textContent, /保留修改/);
+  click(refresh);
+  await until(() => document.querySelector('.catalog-runtime')?.dataset.status === 'connected');
+  assert.equal(checks, 2, 'toolbar refresh checks the configured service');
+  assert.equal(document.querySelector(publish).getAttribute('aria-checked'), 'true');
+  assert.equal(app.store.read().models.find(row => row.id === model.id).enabled, false, 'refresh does not save the draft');
+  assert.equal(upstream.calls.length, 0, 'status checks do not invoke a model');
+  click('[data-action="save-publication"]');
+  await until(() => app.store.read().models.find(row => row.id === model.id).enabled);
+  await until(() => document.querySelector('[data-action="save-publication"]').textContent === '已保存');
   click('[data-view="keys"]'); click('[data-action="add-key"]'); fill('name', '测试 demo');
-  document.querySelector('[name="models"][value="chat-default"]').checked = true;
+  document.querySelector(`[name="models"][value="${model.id}"]`).checked = true;
   submit('#modal-form');
   await until(() => document.querySelector('#new-token'));
   const key = document.querySelector('#new-token').textContent;
   assert.match(key, /^md_key_/);
-  assert.deepEqual((await app.request('/v1/models', 'GET', undefined, key)).data.data.map(item => item.id), ['chat-default']);
+  assert.deepEqual((await app.request('/v1/models', 'GET', undefined, key)).data.data.map(item => item.id), [model.id]);
   assert.ok(document.querySelector('#dialog').open, 'new token dialog survives the prior dialog close event');
   submit('#modal-form'); await modalDone();
-  click('[data-view="playground"]'); fill('model', 'chat-default'); fill('prompt', '你好'); submit('#play-form');
+  click('[data-view="playground"]'); fill('model', model.id); fill('prompt', '你好'); submit('#play-form');
   await until(() => document.querySelector('#response-status').textContent === '已完成');
   assert.equal(document.querySelector('#response-output').textContent, '你好，来自测试上游。');
   assert.match(document.querySelector('#response-meta').textContent, /输入 5 \/ 输出 7/);

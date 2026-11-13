@@ -6,7 +6,7 @@ All endpoints except the console assets and `/healthz` require `Authorization: B
 
 `GET /v1/models` returns only enabled and available models/aliases permitted by the current key.
 
-`POST /v1/chat/completions` accepts the subset in [compatibility.md](compatibility.md). The `model` field is required and is either an exact connection-qualified model ID or a feature alias. Client abort or connection close cancels the upstream. Every response includes `x-request-id`.
+`POST /v1/chat/completions` accepts the subset in [compatibility.md](compatibility.md). The `model` field is required and is either an exact connection-qualified model ID or a compatible legacy alias. Client abort or connection close cancels the upstream. Every response includes `x-request-id`.
 
 ## Management
 
@@ -22,7 +22,8 @@ All configuration mutations require the latest integer `revision`. A stale revis
 | POST | `/admin/connections/:id/discover` | none; checks metadata only, no generation |
 | POST | `/admin/models` | connectionId, nativeId, name?; manual registration for API sources |
 | PATCH | `/admin/models/:encodedId` | enabled |
-| POST | `/admin/routes` | id, name?, modelId; creates or replaces an alias |
+| PATCH | `/admin/model-settings` | complete models array of {id, enabled}; atomic publication only |
+| POST | `/admin/routes` | returns 410 client_owned_settings; new functions belong to clients |
 | DELETE | `/admin/routes/:id` | none |
 | POST | `/admin/keys` | name, models: array of permitted IDs/aliases, or `["*"]` for all enabled models including future ones |
 | DELETE | `/admin/keys/:id` | none; also cancels calls using this key |
@@ -35,3 +36,15 @@ Creation of a key additionally returns `token` once. Omitting `apiKey` on connec
 ## Error handling
 
 Errors follow `{ "error": { "message", "type", "code", "param" } }`. Typical codes include `unauthorized`, `model_forbidden`, `model_unavailable`, `connection_busy`, `unsupported_parameter`, `upstream_auth_failed`, `upstream_protocol_error`, `request_timeout` and `revision_conflict`. A capacity rejection includes `Retry-After: 2` and means no provider generation started. Do not blindly replay requests after a transport failure; the upstream outcome can be unknown.
+
+## Authorized model metadata
+
+`GET /v1/models` includes safe metadata for each authorized native model: `name`, `source: {id, name, type}`, boolean-or-null `capabilities` (`text`, `tools`, `structured`, `thinking`), `context_window`, `reasoning_efforts`, and `default_reasoning_effort`. It never includes provider URLs, provider secrets, administrator settings, or project tokens. Missing capability values stay unknown. Existing aliases are tagged `legacy_alias: true`; they do not expose target model metadata beyond the caller's scope.
+
+The optional fields extend the standard model-list shape; model IDs remain connection-qualified. Reading a model does not prove upstream inference permission. The client demo filters legacy aliases and only builds functions from authorized native models.
+
+## Atomic model publication
+
+`PATCH /admin/model-settings` is administrator-only and requires the latest `revision`. `models` must contain every catalog model exactly once as `{id, enabled}`. Application functions, routes, group policies and reasoning preferences are rejected. Validation and persistence are atomic; a stale revision returns `409 revision_conflict` without partial writes.
+
+Existing legacy aliases and reasoning policies continue to work with their existing scopes. The new consuming-app API is in [client-demo.md](client-demo.md#demo-local-api); those routes run in the separate demo process and cannot alter server publication or project grants.

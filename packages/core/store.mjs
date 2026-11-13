@@ -45,9 +45,17 @@ export class Store {
         this.state = { schemaVersion: SCHEMA_VERSION, revision: 0, connections: [], models: [], routes: [], keys: [] };
         await this.#write(this.state);
       }
-      if (this.state.schemaVersion !== SCHEMA_VERSION || !Number.isSafeInteger(this.state.revision) || !['connections', 'models', 'routes', 'keys'].every(key => Array.isArray(this.state[key]))) throw new Error('Unsupported or damaged state schema.');
+      if (![1, SCHEMA_VERSION].includes(this.state.schemaVersion) || !Number.isSafeInteger(this.state.revision) || !['connections', 'models', 'routes', 'keys'].every(key => Array.isArray(this.state[key]))) throw new Error('Unsupported or damaged state schema.');
       // Fail closed if encrypted state and the key no longer match.
       for (const connection of this.state.connections) if (connection.secret) this.decrypt(connection.secret);
+      if (this.state.schemaVersion === 1) {
+        // v2 adds optional reasoning policies and alias groups. Retain every v1
+        // binding, credential and enabled flag, and back up before the atomic write.
+        const backup = path.join(this.directory, `state.v1.${randomUUID()}.backup.json`);
+        await fs.writeFile(backup, `${JSON.stringify(this.state, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+        const migrated = { ...this.state, schemaVersion: SCHEMA_VERSION, revision: this.state.revision + 1 };
+        await this.#write(migrated); this.state = migrated;
+      }
       return this;
     } catch (error) { await this.close(); throw error; }
   }
