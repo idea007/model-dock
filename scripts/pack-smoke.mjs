@@ -31,7 +31,7 @@ try {
   if (!demoHelp.stdout.includes('client app') || demoHelp.stdout.includes('--mock')) throw new Error('Installed demo CLI failed.');
   const { startDemo } = await import(pathToFileURL(path.join(installed, 'apps/demo/server.mjs')));
   demo = await startDemo({ directory: path.join(temporary, 'demo-data'), port: 0 });
-  for (const endpoint of ['/', '/assets/app.mjs', '/assets/base.css', '/assets/models.css', '/assets/models.mjs', '/assets/demo.css', '/assets/events.mjs', '/healthz']) {
+  for (const endpoint of ['/', '/assets/app.mjs', '/assets/base.css', '/assets/models.css', '/assets/models.mjs', '/assets/demo.css', '/assets/events.mjs', '/assets/api-docs.mjs', '/assets/api-docs.css', '/assets/image-options.mjs', '/healthz']) {
     const response = await fetch(demo.origin + endpoint);
     if (!response.ok) throw new Error(`Installed demo artifact missing ${endpoint}`);
     await response.arrayBuffer();

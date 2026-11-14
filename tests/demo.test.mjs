@@ -75,7 +75,13 @@ test('retired mock data is cleared before exposing the client catalog', async t 
   assert.ok(state.routes.every(route => !route.modelId && route.allowedModelIds.length === 0 && Object.keys(route.reasoningOverrides).length === 0));
 });
 
-for (const entry of ['', '?view=models', '?view=settings']) test(`client page ${entry || '/'} opens without a token and connects using a server-created project key`, async t => {
+const clientPages = {
+  '': '你的功能，选择你的模型。',
+  '?view=models': '功能与模型',
+  '?view=settings': '接入设置',
+  '?view=api': '接口文档'
+};
+for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${entry || '/'} opens without a token and connects using a server-created project key`, async t => {
   const f = await fixture(t, false), model = f.mock.app.store.read().models[0];
   const key = await f.mock.app.gateway.createKey({ revision: f.mock.app.store.read().revision, name: 'Browser client', models: [model.id] });
   const html = await fs.readFile(new URL('../apps/demo/index.html', import.meta.url), 'utf8');
@@ -86,7 +92,9 @@ for (const entry of ['', '?view=models', '?view=settings']) test(`client page ${
   const retired = { ...await f.api('/api/state'), models: [{ ...model, name: 'retired-simulated-model', reasoningPolicy: null, groupPolicies: {} }], connections: [{ id: model.connectionId, name: 'Retired', type: 'openai', enabled: true, status: 'connected' }] };
   win.sessionStorage.setItem('model-dock-demo-draft-v1', JSON.stringify({ snapshot: retired, base: settings(retired), draft: settings(retired) }));
   const descriptors = new Map(), nativeFetch = globalThis.fetch, requests = [];
+  let clipboard;
   const globals = { window: win, document: win.document, location: win.location, history: win.history, sessionStorage: win.sessionStorage, FormData: win.FormData,
+    navigator: { clipboard: { writeText: async value => { clipboard = value; } } },
     fetch: (url, options = {}) => {
       if (!url.startsWith('/')) return nativeFetch(url, options);
       requests.push(url); return nativeFetch(new URL(url, f.app.origin), { ...options, headers: { ...options.headers, origin: f.app.origin, 'sec-fetch-site': 'same-origin' } });
@@ -96,7 +104,9 @@ for (const entry of ['', '?view=models', '?view=settings']) test(`client page ${
   t.after(() => { module?.dispose(); win.close(); for (const [name, descriptor] of descriptors) { if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name]; } });
   const source = (await fs.readFile(new URL('../apps/demo/app.mjs', import.meta.url), 'utf8'))
     .replace("'./models.mjs'", JSON.stringify(new URL('../apps/demo/models.mjs', import.meta.url).href))
-    .replace("'./events.mjs'", JSON.stringify(new URL('../packages/protocol/events.mjs', import.meta.url).href));
+    .replace("'./events.mjs'", JSON.stringify(new URL('../packages/protocol/events.mjs', import.meta.url).href))
+    .replace("'./api-docs.mjs'", JSON.stringify(new URL('../apps/console/api-docs.mjs', import.meta.url).href))
+    .replace("'./image-options.mjs'", JSON.stringify(new URL('../packages/protocol/image-options.mjs', import.meta.url).href));
   const open = async () => { module = await import(`data:text/javascript;base64,${Buffer.from(source + `\n// ${entry}:${requests.length}`).toString('base64')}`); };
   const document = win.document;
   const click = selector => { const node = document.querySelector(selector); assert.ok(node, selector); node.click(); };
@@ -104,12 +114,22 @@ for (const entry of ['', '?view=models', '?view=settings']) test(`client page ${
   const submit = selector => { const form = document.querySelector(selector); form.dispatchEvent(new win.SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: form.querySelector('button[type="submit"]') })); };
   await open();
   assert.equal(document.querySelector('#login-form'), null); assert.ok(document.querySelector('.shell'));
-  assert.equal(document.querySelector('h1').textContent, entry === '?view=settings' ? '接入设置' : entry ? '功能与模型' : '你的功能，选择你的模型。');
-  assert.deepEqual([...document.querySelectorAll('.nav [data-view]')].map(node => node.dataset.view), ['settings', 'models', 'experience']);
+  assert.equal(document.querySelector('h1').textContent, heading);
+  assert.deepEqual([...document.querySelectorAll('.nav [data-view]')].map(node => node.dataset.view), ['settings', 'models', 'api', 'experience']);
   assert.equal(document.querySelectorAll('.demo-heading [data-action="connection"]').length, 0);
-  assert.match(document.querySelector('.mode-badge').textContent, /未连接/);
+  if (entry !== '?view=api') assert.match(document.querySelector('.mode-badge').textContent, /未连接/);
   if (entry === '?view=models') assert.match(document.querySelector('#model-list').textContent, /尚无授权模型/);
-  if (entry !== '?view=settings') { assert.equal(document.querySelector('#connection-form'), null); click('.nav [data-view="settings"]'); }
+  if (entry === '?view=api') {
+    assert.equal(document.querySelector('.nav [aria-current="page"]').dataset.view, 'api');
+    assert.equal(document.querySelector('.api-base-url').textContent, 'http://127.0.0.1:4317/v1');
+    click('[data-api-id="chat"] summary');
+    assert.ok(document.querySelector('[data-api-id="chat"]').open);
+    assert.ok(document.querySelector('#api-code-chat-request').textContent.includes('connection-id/model-id'));
+    click('.api-authorization [data-view="settings"]');
+  } else if (entry !== '?view=settings') {
+    assert.equal(document.querySelector('#connection-form'), null);
+    click('.nav [data-view="settings"]');
+  }
   assert.ok(document.querySelector('#connection-form')); assert.equal(win.location.search, '?view=settings');
   assert.equal(document.querySelector('.nav [aria-current="page"]').dataset.view, 'settings');
   assert.ok(!document.body.textContent.includes('retired-simulated-model'));
@@ -127,6 +147,20 @@ for (const entry of ['', '?view=models', '?view=settings']) test(`client page ${
   assert.ok(!document.body.innerHTML.includes(key.token)); assert.ok(!JSON.stringify(win.sessionStorage).includes(key.token));
   assert.equal(document.querySelector('#dialog').open, false); assert.equal(document.querySelector('[name="apiKey"]').value, '');
   assert.match(document.querySelector('#catalog-summary').textContent, /1 个/);
+  if (entry === '?view=api') {
+    const requestCount = requests.length;
+    click('.nav [data-view="api"]');
+    assert.ok(document.querySelector('[data-api-id="chat"]').open, 'navigation preserves the expanded interface');
+    click('.api-docs [data-action="copy-endpoint"]');
+    assert.equal(clipboard, f.mock.connection.baseUrl);
+    click('[data-code-id="api-code-chat-request"]');
+    assert.ok(clipboard.includes(`${f.mock.connection.baseUrl}/chat/completions`));
+    assert.ok(clipboard.includes('$MODEL_DOCK_API_KEY'));
+    assert.equal(JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]).model, model.id, 'a project-authorized model is usable in examples even before enabling it for app features');
+    assert.ok(!clipboard.includes(key.token));
+    assert.ok(!document.querySelector('.api-docs').innerHTML.includes(key.token));
+    assert.equal(requests.length, requestCount, 'opening and copying documentation does not call any API');
+  }
   click('.nav [data-view="models"]');
   assert.equal(document.querySelectorAll('[data-mm="toggle-model"]').length, 1); assert.equal(document.querySelector('#connection-form'), null);
   click('.nav [data-view="settings"]');

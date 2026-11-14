@@ -28,16 +28,20 @@ function endpoint(id, method, path, title, description, content, expanded, auth 
   </details>`;
 }
 
-function modelHint(model, kind) {
-  return model
-    ? `<p class="api-note">示例已使用当前发布的${kind}模型 ${code(model.id)}；调用前请确认项目密钥有权访问该模型。</p>`
-    : `<p class="api-note">当前没有可用的${kind}模型。请先在「模型与服务」发布模型，并将示例中的 model 替换为 ${code('GET /v1/models')} 返回的完整 ID。</p>`;
+function modelHint(model, kind, client) {
+  if (model) {
+    const scope = client ? '当前项目授权的' : '当前发布的';
+    const access = client ? '' : '调用前请确认项目密钥有权访问该模型。';
+    return `<p class="api-note">示例使用${scope}${kind}模型 ${code(model.id)}。${access}</p>`;
+  }
+  const modelsEndpoint = code('GET /v1/models');
+  if (client) return `<p class="api-note">用项目密钥调用 ${modelsEndpoint}，将返回的${kind}模型完整 ID 填入示例中的 ${code('model')}。</p>`;
+  return `<p class="api-note">当前没有可用的${kind}模型。请先在「模型与服务」发布模型，并将示例中的 model 替换为 ${modelsEndpoint} 返回的完整 ID。</p>`;
 }
 
-export function apiDocsPage(state, imageOptions, expanded = new Set()) {
-  const baseUrl = state.baseUrl.replace(/\/$/, '');
+export function apiDocsPage({ baseUrl: gatewayUrl, models, version, expanded = new Set(), client = false }, imageOptions) {
+  const baseUrl = gatewayUrl.replace(/\/+$/, '');
   const origin = new URL(baseUrl).origin;
-  const models = state.models.filter(model => model.enabled && model.available !== false && state.connections.some(connection => connection.id === model.connectionId && connection.enabled));
   const textModel = models.find(model => model.capability !== 'image_generation' && model.capabilities?.text !== false);
   const imageModel = models.find(model => model.capability === 'image_generation');
   const textId = textModel?.id || 'connection-id/model-id';
@@ -79,7 +83,7 @@ export function apiDocsPage(state, imageOptions, expanded = new Set()) {
       [code('temperature / top_p'), 'number · 可选', 'temperature 为 0–2；top_p 为 0–1。Codex 不支持。'],
       [code('stop / seed / user'), '可选', 'stop 为字符串或最多 4 个字符串；seed 为安全整数；user 为最长 200 字符的字符串。支持情况见下表。']
     ])}
-    ${modelHint(textModel, '文本')}
+    ${modelHint(textModel, '文本', client)}
     ${block('chat-request', '文本对话 · cURL', curl(`${baseUrl}/chat/completions`, chatBody), '复制 cURL')}
     ${block('chat-response', '200 · 响应结构示例', json({ id: 'chatcmpl-example', object: 'chat.completion', created: 0, model: textId, choices: [{ index: 0, message: { role: 'assistant', content: '你好！有什么可以帮你？' }, finish_reason: 'stop' }] }))}
     <p class="api-note">读取 choices[0].message.content；函数调用见 message.tool_calls，finish_reason 为 tool_calls。usage 只在上游提供完整统计时返回，不能将缺失统计当作 0。</p>
@@ -109,7 +113,7 @@ export function apiDocsPage(state, imageOptions, expanded = new Set()) {
       [code('background'), 'string · 可选', `${code('auto')} 或 ${code('transparent')}；后者请求透明背景。`],
       [code('n / response_format'), '可选', `仅接受 n: 1 和 response_format: "b64_json"；完整 JSON 请求体上限 ${mib(maxImageRequestBytes)}。`]
     ])}
-    ${modelHint(imageModel, '图片')}
+    ${modelHint(imageModel, '图片', client)}
     ${block('images-request', '图片生成 · cURL', curl(`${baseUrl}/images/generations`, { model: imageId, prompt: '浅色背景上的蓝色陶瓷杯', aspect_ratio: '1:1', n: 1, response_format: 'b64_json' }), '复制 cURL')}
     ${block('images-response', '200 · 响应结构示例', json({ created: 0, output_format: 'png', data: [{ b64_json: '图片的 Base64 内容', width: 1024, height: 1024 }] }))}
     <p>读取 data[0].b64_json 还原图片；output_format 为 png、jpeg 或 webp，width / height 为实际像素尺寸。比例和透明背景作为生成要求传入，实际尺寸、格式及透明度以结果为准。</p>
@@ -122,15 +126,17 @@ export function apiDocsPage(state, imageOptions, expanded = new Set()) {
   const health = endpoint('health', 'GET', '/healthz', '健康检查', '确认本机网关进程可访问，并读取版本。', `
     <p>无需鉴权或请求参数，路径位于网关根目录，不包含 /v1。仅反映网关进程状态，不检查上游连接或模型推理权限。</p>
     ${block('health-request', '健康检查 · cURL', curl(`${origin}/healthz`, undefined, { auth: false }), '复制 cURL')}
-    ${block('health-response', '200 · 响应结构示例', json({ ok: true, version: state.version }))}
+    ${block('health-response', '200 · 响应结构示例', json({ ok: true, version }))}
   `, expanded, false);
 
+  const keyView = client ? 'settings' : 'keys';
+  const keyLink = client ? '接入设置' : '管理项目密钥';
   return `<div class="api-docs">
     <header class="page-heading"><div class="eyebrow">API REFERENCE</div><h1>接口文档</h1><p>查看接口、展开详情，把模型能力接入你的应用。</p></header>
     <section class="card api-connection" aria-labelledby="api-connection-title">
       <div class="between wrap"><div><h2 id="api-connection-title">接入地址与鉴权</h2><p>兼容客户端的 Base URL</p><code class="api-base-url">${escape(baseUrl)}</code></div><button data-action="copy-endpoint">${copyIcon}复制地址</button></div>
-      <div class="api-authorization"><div><span>请求头</span><code>Authorization: Bearer $MODEL_DOCK_API_KEY</code></div><button class="small-button" data-view="keys">管理项目密钥 →</button></div>
-      <p class="api-note">先在「项目访问」创建密钥，将其存入环境变量 MODEL_DOCK_API_KEY。带请求体时使用 Content-Type: application/json。本机网关仅接受本机访问，密钥请由后端或本机应用保管。</p>
+      <div class="api-authorization"><div><span>请求头</span><code>Authorization: Bearer $MODEL_DOCK_API_KEY</code></div><button class="small-button" data-view="${keyView}">${keyLink} →</button></div>
+      <p class="api-note">在服务端「项目访问」创建项目密钥，运行 cURL 示例前将它设为终端环境变量 MODEL_DOCK_API_KEY。带请求体时使用 Content-Type: application/json。</p>
     </section>
     <div class="section-header between wrap"><h2 id="api-list-title">接口列表 <span class="api-count">4</span></h2><span class="muted">点击接口查看参数与示例</span></div>
     <section class="api-endpoints" aria-labelledby="api-list-title">${catalog}${chat}${images}${health}</section>

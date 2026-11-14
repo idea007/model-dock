@@ -1,12 +1,20 @@
 import { ModelManager } from './models.mjs';
 import { sse } from './events.mjs';
+import { apiDocsPage } from './api-docs.mjs';
+import * as imageOptions from './image-options.mjs';
 const $ = selector => document.querySelector(selector);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const kinds = { chat: '自由对话', extract: '结构化提取', summarize: '文档摘要', rewrite: '文本润色', translate: '多语言翻译', explain: '代码讲解', review: '代码审查' };
 const examples = { chat: '用三句话解释什么是模型网关。', extract: '小林计划在周五上午十点与设计团队评审新首页，会议地点是二楼会议室。', summarize: '团队将模型接入集中到网关管理。各应用只需要项目密钥即可访问获授权的模型，并在自己的应用内维护功能、默认模型和思考偏好。', rewrite: '我们把模型接好啦，之后做新功能的时候就可以直接用了，不用每次都搞一遍密钥。', translate: '好的工具应该清楚地划分职责，同时让使用者感到简单。', explain: 'const unique = values => [...new Set(values)];', review: 'async function loadProfile(id) {\n  return fetch(`/users/${id}`).then(res => res.json());\n}' };
-const navigation = [['settings', '接入设置', '⚙'], ['models', '功能与模型', '◈'], ['experience', '应用体验', '▷']];
+const navigation = [
+  ['settings', '接入设置', '⚙'],
+  ['models', '功能与模型', '◈'],
+  ['api', '接口文档', '▤'],
+  ['experience', '应用体验', '▷']
+];
 const currentView = () => navigation.find(([id]) => id === new URLSearchParams(location.search).get('view'))?.[0] || 'experience';
 let token = '', state, view = currentView();
+let expandedApiEndpoints = new Set();
 let featureId = 'chat', chosenModel = '', prompt = '', promptFeature = '', generation, toastTimer, busy = false;
 const fragment = new URLSearchParams(location.hash.slice(1));
 if (fragment.has('token')) history.replaceState(null, '', location.pathname + location.search);
@@ -65,10 +73,47 @@ async function refreshModels(notify = true) {
   finally { busy = false; if (view === 'settings') updateConnectionStatus(); else render(); }
   if (notify) toast(manager.error || manager.notice, Boolean(manager.error));
 }
+function pageContent(status) {
+  const { baseUrl, configured, error } = state.connection;
+  if (view === 'api') {
+    return apiDocsPage({
+      baseUrl,
+      models: configured ? state.models.filter(model => model.available !== false) : [],
+      version: state.version,
+      expanded: expandedApiEndpoints,
+      client: true
+    }, imageOptions);
+  }
+  const title = view === 'experience' ? '你的功能，选择你的模型。' : navigation.find(([id]) => id === view)[1];
+  const description = { experience: '从一个功能开始，体验应用如何使用 Model Dock。', settings: '管理服务端地址、项目密钥与模型同步。' }[view];
+  return `<div class="between demo-heading ${view === 'models' ? 'models-heading' : ''}">
+    <div><h1>${title}</h1>${description ? `<p>${description}</p>` : ''}</div>
+    <div class="row connection-status">
+      <span data-connection-status class="mode-badge ${error ? 'error' : !configured ? 'pending' : ''}">${status}</span>
+      ${view === 'experience' && configured ? '<button data-action="refresh-models">刷新模型</button>' : ''}
+    </div>
+  </div>
+  <div id="connection-error" class="cm-feedback error" role="alert" ${!error ? 'hidden' : ''}>${esc(error)}</div>
+  ${!configured && view !== 'settings' ? '<div class="connect-banner"><p>尚未连接服务端。请先在接入设置中填写项目密钥。</p><button data-view="settings">前往接入设置 →</button></div>' : ''}
+  ${view === 'settings' ? settings() : view === 'models' ? '<div id="model-manager"></div>' : experience()}`;
+}
 function render() {
   if (!state) return;
-  const status = connectionStatus(), title = view === 'experience' ? '你的功能，选择你的模型。' : navigation.find(([id]) => id === view)[1];
-  $('#app').innerHTML = `<div class="shell reference-layout demo-shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">M</span>Model Dock</div><div class="sidebar-sub">接入端 / CLIENT APP</div><div class="nav-label">应用 / APPLICATION</div><nav class="nav" aria-label="应用导航">${navigation.map(([id, label, icon]) => `<button data-view="${id}" class="${view === id ? 'active' : ''}" ${view === id ? 'aria-current="page"' : ''}><span class="nav-symbol" aria-hidden="true">${icon}</span>${label}</button>`).join('')}</nav><div class="sidebar-bottom"><p data-connection-status>${status}</p></div></aside><main class="page"><div class="between demo-heading ${view === 'models' ? 'models-heading' : ''}"><div><h1>${title}</h1>${view === 'experience' ? '<p>从一个功能开始，体验应用如何使用 Model Dock。</p>' : view === 'settings' ? '<p>管理服务端地址、项目密钥与模型同步。</p>' : ''}</div><div class="row connection-status"><span data-connection-status class="mode-badge ${state.connection.error ? 'error' : !state.connection.configured ? 'pending' : ''}">${status}</span>${view === 'experience' && state.connection.configured ? '<button data-action="refresh-models">刷新模型</button>' : ''}</div></div><div id="connection-error" class="cm-feedback error" role="alert" ${!state.connection.error ? 'hidden' : ''}>${esc(state.connection.error)}</div>${!state.connection.configured && view !== 'settings' ? '<div class="connect-banner"><p>尚未连接服务端。请先在接入设置中填写项目密钥。</p><button data-view="settings">前往接入设置 →</button></div>' : ''}${view === 'settings' ? settings() : view === 'models' ? '<div id="model-manager"></div>' : experience()}</main></div>`;
+  const endpoints = $('.api-endpoints');
+  if (endpoints) {
+    expandedApiEndpoints = new Set([...endpoints.querySelectorAll('details[open]')].map(detail => detail.dataset.apiId));
+  }
+  const status = connectionStatus();
+  $('#app').innerHTML = `<div class="shell reference-layout demo-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">M</span>Model Dock</div>
+      <div class="sidebar-sub">接入端 / CLIENT APP</div>
+      <div class="nav-label">应用 / APPLICATION</div>
+      <nav class="nav" aria-label="应用导航">${navigation.map(([id, label, icon]) => `<button data-view="${id}" class="${view === id ? 'active' : ''}" ${view === id ? 'aria-current="page"' : ''}><span class="nav-symbol" aria-hidden="true">${icon}</span>${label}</button>`).join('')}</nav>
+      <div class="sidebar-bottom"><p data-connection-status>${status}</p></div>
+    </aside>
+    <main class="page">${pageContent(status)}</main>
+  </div>`;
   if (view === 'models') manager.mount($('#model-manager'), state);
 }
 function featureCard(feature) {
@@ -153,6 +198,15 @@ on(document, 'click', async event => {
   if (event.target.closest('[data-mm]')) return;
   const button = event.target.closest('button'); if (!button || button.disabled) return;
   const { action, id } = button.dataset;
+  if (action === 'copy-endpoint' || action === 'copy-api-example') {
+    const copyingAddress = action === 'copy-endpoint';
+    const value = copyingAddress ? state.connection.baseUrl : document.getElementById(button.dataset.codeId).textContent;
+    try {
+      await navigator.clipboard.writeText(value);
+      toast(copyingAddress ? '地址已复制。' : '接口示例已复制。');
+    } catch { toast('复制失败，请选中内容手动复制。', true); }
+    return;
+  }
   if (generation && action !== 'stop') { toast('请先停止或等待当前请求。'); return; }
   if ((busy || manager.busy) && action !== 'stop') return;
   if (button.dataset.view) { view = button.dataset.view; history.pushState(null, '', `?view=${view}`); render(); return; }

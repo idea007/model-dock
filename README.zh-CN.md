@@ -23,21 +23,51 @@ npm start
 
 服务运行期间可用 `npm run console` 重新打开并登录管理台。如需在指定浏览器中打开，运行 `npm run --silent console -- --print`，把生成的一次性链接粘贴到地址栏。同一浏览器中打开相同地址会沿用登录状态，最长有效期为 7 天；重启网关会自动打开管理台并重新登录（使用 `--no-open` 时除外）。
 
-1. 在「连接与凭证」添加模型来源，点击「发现模型」。
-2. 在「模型与服务」启用要发布的模型。模型声明了思考深度时，可选择开放等级，并点击图钉设为默认。点击「保存更改」生效。新发现的模型默认不发布。
-3. 在「项目访问」创建项目密钥，选择允许访问的模型。
-4. 在「调用测试」验证真实请求，再把网关地址、项目密钥和带来源前缀的模型 ID 填入应用。
+截图使用端口为 4327 和 4328 的独立本机实例。实际操作时，从自己的管理台复制 Base URL。
+
+### 1. 添加模型来源
+
+在「连接与凭证」添加模型 API、Ollama 实例或已登录的本机 Codex CLI。下图以 Codex 为例。保存连接后，在对应卡片点击「发现模型」，查看检查状态和模型数量。
+
+![服务端连接与凭证页面显示本机 Codex 已发现模型](docs/screenshots/server-connections.webp)
+
+### 2. 发布模型
+
+在「模型与服务」找到要提供给项目的模型，打开发布开关。新发现的模型默认关闭。模型支持思考深度时，可以选择开放等级并用图钉设定默认值。在右上角点击「保存更改」完成发布。想先试用模型，可以打开「调用测试」，选中已发布模型，填写提示词后点击「发送请求」。
+
+![服务端模型与服务页面中 GPT-6.1 Terra 开关已打开，等待保存发布](docs/screenshots/server-publish-model.webp)
+
+### 3. 创建项目密钥
+
+在「项目访问」点击「创建密钥」，填写项目名称，勾选这个项目需要访问的已发布模型。创建后及时复制完整的 `md_key_…` 密钥，关闭后无法再次查看。在同一页复制网关 Base URL。
+
+![创建项目访问密钥弹窗中只勾选了一个已发布模型](docs/screenshots/server-project-key.webp)
 
 ## 体验独立接入端 demo
 
 ```sh
-# 使用服务端创建的项目密钥连接 Model Dock
 npm run demo -- --open
 ```
 
-接入端默认运行于 **http://127.0.0.1:4318**，可以直接打开，无需填写本地会话令牌。左侧「接入设置」页面提供服务端 API 地址和项目密钥输入框；粘贴在服务端「项目访问」创建的 `md_key_…` 密钥后读取授权模型。未连接时模型目录为空，不提供模拟数据。接入端有独立进程和数据目录，包含对话/提取功能、内容处理与开发助手分组，支持单模型、多候选、独立默认模型、思考深度继承和流式体验。
+保持网关运行，在另一个终端启动接入端。接入端默认可直接打开 **http://127.0.0.1:4318**，连接服务端后才会显示授权模型。
 
-「功能与模型」已迁入这里。按凭证 / 按功能查看、搜索、展开分组、调整列宽、保存/撤销及草稿恢复都只影响此应用。后端使用项目密钥获取授权目录并发起真实推理，不调用管理接口。左侧独立的「接入设置」页面可更换地址与密钥。「刷新模型」会同步服务端的模型开关、能力和思考深度；重新打开页面也会更新目录。详见 [接入端启动说明](docs/client-demo.zh-CN.md) 与 [功能设置说明](docs/model-settings.zh-CN.md)。
+### 1. 连接服务端
+
+在左侧「接入设置」填入包含 `/v1` 的网关 Base URL 和项目密钥，点击「连接并读取模型」。确认右上角显示「已连接服务端」，下方显示授权模型数量。服务端调整模型发布、能力或思考深度后，可在此处点击「刷新模型」同步。
+
+![接入端设置页面显示已连接服务端、网关地址和一个授权模型](docs/screenshots/client-connection.webp)
+
+### 2. 给功能分配模型
+
+进入「功能与模型」，启用本应用要用的模型，在该模型的「可应用功能」列选中「自由对话」，然后点击「保存更改」。如果某个功能允许多个候选，可以勾选候选模型，并点击图钉指定默认模型。也可以切换到「按功能」视图配置。[功能与模型设置](docs/model-settings.zh-CN.md)
+
+![接入端功能与模型页面已启用模型并选中自由对话](docs/screenshots/client-functions-models.webp)
+
+### 3. 运行功能
+
+打开「应用体验」，选择「自由对话」，使用默认模型或手动选择已配置的候选，输入提示词并点击「运行功能」。回复会显示在「运行结果」中。调用会使用所选模型来源的资源和额度。[接入端启动说明](docs/client-demo.zh-CN.md)
+
+![接入端应用体验显示自由对话的提示词和运行结果](docs/screenshots/client-experience.webp)
 
 | 服务端管理台 · 4317 | 接入端 demo · 4318 |
 | --- | --- |
@@ -49,8 +79,16 @@ npm run demo -- --open
 
 ## 接入自己的项目
 
+服务端和接入端左侧都有「接口文档」。展开接口可以查看参数、响应和 cURL 示例。接入端的示例使用「接入设置」中保存的网关地址。展开 `GET /v1/models` 可复制目录查询命令，从返回的 `data[].id` 取得授权模型的完整 ID。[API 文档](docs/api.md)
+
+![接入端接口文档展开 GET /v1/models，显示接口说明和复制 cURL 按钮](docs/screenshots/client-api-docs.webp)
+
 ```sh
 export MODEL_DOCK_API_KEY='从管理台创建的项目密钥'
+export MODEL_DOCK_BASE_URL='http://127.0.0.1:4317/v1'
+curl "$MODEL_DOCK_BASE_URL/models" -H "Authorization: Bearer $MODEL_DOCK_API_KEY"
+
+# 使用上面接口返回的文本模型完整 ID。
 export MODEL_DOCK_MODEL='connection-id/model-id'
 node examples/chat.mjs
 ```
@@ -61,11 +99,11 @@ node examples/chat.mjs
 import OpenAI from 'openai';
 
 const client = new OpenAI({
-  baseURL: 'http://127.0.0.1:4317/v1',
+  baseURL: process.env.MODEL_DOCK_BASE_URL || 'http://127.0.0.1:4317/v1',
   apiKey: process.env.MODEL_DOCK_API_KEY,
 });
 const result = await client.chat.completions.create({
-  model: 'connection-id/model-id',
+  model: process.env.MODEL_DOCK_MODEL,
   messages: [{ role: 'user', content: '你好' }],
 });
 console.log(result.choices[0].message.content);

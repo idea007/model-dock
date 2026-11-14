@@ -24,6 +24,8 @@ Open `http://127.0.0.1:4318` directly or refresh it without a manual local-sessi
 
 **Connection settings** (`接入设置`) is a separate page alongside **Application experience** and **Functions & models** in the left navigation, including on mobile. Open it directly at `/?view=settings`. Failed validation shows an error without saving invalid credentials. Saved connections survive client restarts.
 
+Open **API documentation** (`接口文档`, `/?view=api`) to read the gateway's endpoint details and copy cURL examples. The reference is available before connecting and uses the configured gateway address when connected.
+
 After saving server publication, capability or reasoning changes, use **Refresh models** (`刷新模型`) in Connection settings or Functions & models without reentering the key. Settings shows the available authorized model count and last successful sync time. Reopening the page also refreshes the catalog. Unsaved application drafts survive metadata refreshes; concurrent edits to saved application preferences still produce a revision conflict.
 
 Built-in features include standalone conversation and structured extraction; a content group with summary, rewriting and translation; and a development group with code explanation and review. These are templates for real requests and start without model bindings.

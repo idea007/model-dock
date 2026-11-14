@@ -12,7 +12,10 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 const files = new Map([
   ['/', ['index.html', 'text/html']], ['/assets/app.mjs', ['app.mjs', 'text/javascript']], ['/assets/models.mjs', ['models.mjs', 'text/javascript']],
   ['/assets/base.css', ['base.css', 'text/css']], ['/assets/models.css', ['models.css', 'text/css']], ['/assets/demo.css', ['demo.css', 'text/css']],
-  ['/assets/events.mjs', ['../../packages/protocol/events.mjs', 'text/javascript']]
+  ['/assets/events.mjs', ['../../packages/protocol/events.mjs', 'text/javascript']],
+  ['/assets/image-options.mjs', ['../../packages/protocol/image-options.mjs', 'text/javascript']],
+  ['/assets/api-docs.mjs', ['../console/api-docs.mjs', 'text/javascript']],
+  ['/assets/api-docs.css', ['../console/api-docs.css', 'text/css']]
 ]);
 const json = (response, status, value) => { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)); };
 const hash = value => createHash('sha256').update(value).digest();
