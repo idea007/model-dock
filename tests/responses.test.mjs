@@ -68,6 +68,7 @@ test('Responses SDK creates and streams stateless text with the three existing a
   for (const { url, body } of httpCalls) {
     assert.deepEqual(body.messages[0], { role: 'system', content: 'Answer briefly.' });
     assert.equal(body.store, url === '/v1/chat/completions' ? false : undefined);
+    assert.equal(body.stream_options, undefined);
     if (body.messages.length > 2) assert.deepEqual(body.messages.at(-1), userMessage('Follow up.'));
   }
   const highLevel = client.responses.stream({ model: modelIds.openai, input: 'hello' });
@@ -76,6 +77,24 @@ test('Responses SDK creates and streams stateless text with the three existing a
   const replayed = await client.responses.create({ model: modelIds.openai, input: [userMessage('hello'), ...completed.output, userMessage('continue')] });
   assert.equal(replayed.output_text, expected.openai);
   assert.deepEqual(upstream.calls.at(-1).body.messages[1], { role: 'assistant', content: expected.openai });
+});
+
+test('Responses requests stream usage from the official OpenAI host', async t => {
+  const upstream = await fixtureUpstream(t, undefined, { usageOptIn: true }), app = await setup(t);
+  const fetch = globalThis.fetch;
+  t.mock.method(globalThis, 'fetch', (input, options) => {
+    if (typeof input !== 'string' || new URL(input).origin !== 'https://api.openai.com') return fetch(input, options);
+    const url = new URL(input);
+    return fetch(upstream.origin + url.pathname, options);
+  });
+  const model = (await app.connection('openai', 'https://api.openai.com/v1')) + '/shared';
+  await app.enable(model);
+  const client = new OpenAI({ baseURL: `${app.origin}/v1`, apiKey: app.admin, maxRetries: 0 });
+  const stream = client.responses.stream({ model, input: 'hello' });
+  assert.equal((await stream.finalResponse()).usage.total_tokens, 12);
+  assert.deepEqual(upstream.calls.at(-1).body.stream_options, { include_usage: true });
+  await client.responses.create({ model, input: 'hello' });
+  assert.equal(upstream.calls.at(-1).body.stream_options, undefined);
 });
 
 test('Responses SDK replays completed application functions and preserves item and call identity', async t => {
@@ -121,6 +140,72 @@ test('Responses SDK replays completed application functions and preserves item a
   assert.equal(calls[2].body.messages.at(-1).tool_call_id, 'call_1');
 });
 
+test('Ollama Responses SDK streams a single function and replays each completed result without state', async t => {
+  const { upstream, modelIds, client } = await setupResponses(t, ['ollama']);
+  const model = modelIds.ollama;
+  const input = [userMessage('native-tool')];
+  const params = { model, input, tools, tool_choice: 'auto' };
+  const initial = await client.responses.create(params);
+  assert.equal(initial.status, 'completed');
+  assert.equal(initial.store, false);
+  assert.equal(initial.parallel_tool_calls, false);
+  assert.equal(initial.output_text, '我会查询。');
+  assert.deepEqual(initial.output.map(item => item.type), ['message', 'function_call']);
+  const originalCall = initial.output[1];
+  assert.equal(originalCall.call_id, 'call_native_ollama');
+  assert.equal(originalCall.arguments, '{}');
+  assert.notEqual(originalCall.id, originalCall.call_id);
+  const firstResult = { type: 'function_call_output', call_id: originalCall.call_id, output: '{"temp":22}' };
+
+  const nextInput = [...input, ...initial.output, firstResult, userMessage('native-tool-no-id')];
+  const stream = client.responses.stream({ ...params, input: nextInput, parallel_tool_calls: false });
+  const events = await collect(stream);
+  const completed = await stream.finalResponse();
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.usage.total_tokens, 7);
+  const streamed = completed.output[1];
+  assert.match(streamed.call_id, /^call_[0-9a-f-]+$/);
+  assert.equal(streamed.arguments, '{}');
+  const itemEvents = events.slice(-5);
+  assert.deepEqual(itemEvents.map(event => event.type), ['response.output_item.added', 'response.function_call_arguments.delta',
+    'response.function_call_arguments.done', 'response.output_item.done', 'response.completed']);
+  assert.ok(itemEvents.slice(0, -1).every(event => event.output_index === 1));
+  assert.equal(itemEvents[1].item_id, streamed.id);
+  assert.equal(itemEvents[1].delta, '{}');
+
+  const finalInput = [...nextInput, ...completed.output,
+    { type: 'function_call_output', call_id: streamed.call_id, output: '22°C' }];
+  const final = await client.responses.create({ model, input: finalInput });
+  assert.equal(final.output_text, '工具结果：22°C');
+  const calls = upstream.calls.filter(call => call.url === '/api/chat');
+  assert.equal(calls[0].body.parallel_tool_calls, undefined);
+  assert.equal(calls[0].body.tool_choice, undefined);
+  assert.equal(calls[0].body.tools[0].function.strict, undefined);
+  const toolHistory = calls[2].body.messages.filter(message => message.tool_calls || message.role === 'tool');
+  assert.deepEqual(toolHistory, [originalCall, streamed].flatMap(({ call_id }, index) => [
+    { role: 'assistant', content: '我会查询。', tool_calls: [{ id: call_id, function: { index: 0, name: 'weather', arguments: {} } }] },
+    { role: 'tool', tool_name: 'weather', tool_call_id: call_id, content: index === 0 ? firstResult.output : '22°C' }
+  ]));
+  const count = upstream.calls.length;
+  for (const broken of [[...input, ...initial.output], [...input, ...initial.output, firstResult, firstResult]]) {
+    await assert.rejects(client.responses.create({ model, input: broken }), error => error.status === 400 && error.code === 'invalid_request');
+  }
+  assert.equal(upstream.calls.length, count);
+  const disabled = await client.responses.create({ ...params, tool_choice: 'none' });
+  assert.deepEqual(disabled.output.map(item => item.type), ['message']);
+  assert.equal(upstream.calls.at(-1).body.tools, undefined);
+
+  for (const [prompt, terminal, code] of [
+    ['native-tool-multiple', 'response.failed', 'upstream_tool_choice_failed'],
+    ['native-tool-length', 'response.incomplete', undefined]
+  ]) {
+    const events = await collect(await client.responses.create({ ...params, input: prompt, stream: true }));
+    assert.equal(events.at(-1).type, terminal);
+    assert.equal(events.at(-1).response.error?.code, code);
+    assert.ok(events.every(event => event.item?.type !== 'function_call' && !event.type.startsWith('response.function_call_arguments.')));
+  }
+});
+
 test('Responses errors stay on the HTTP boundary until streaming starts', async t => {
   const { app, upstream, modelIds, key, client } = await setupResponses(t, ['openai', 'ollama', 'codex']);
   const params = { model: modelIds.openai, input: 'hello', stream: true };
@@ -131,7 +216,10 @@ test('Responses errors stay on the HTTP boundary until streaming starts', async 
     [{ parallel_tool_calls: true }, 'parallel_tool_calls'], [{ max_output_tokens: 50 }, 'max_output_tokens'],
     [{ input: [{ type: 'reasoning', encrypted_content: 'ignored' }] }, 'input'],
     [{ input: [userMessage([{ type: 'input_image', image_url: 'https://example.com/image.png' }])] }, 'input'],
-    [{ tools: [{ type: 'web_search' }] }, 'tools'], [{ model: modelIds.ollama, tools }, 'tools'],
+    [{ tools: [{ type: 'web_search' }] }, 'tools'],
+    [{ model: modelIds.ollama, tools, tool_choice: 'required' }, 'tool_choice'],
+    [{ model: modelIds.ollama, tools, tool_choice: { type: 'function', name: 'weather' } }, 'tool_choice'],
+    [{ model: modelIds.ollama, tools: [{ ...tools[0], strict: true }] }, 'tools.function.strict'],
     [{ input: longInput, instructions: 'Answer briefly.' }, 'input']
   ];
   const count = upstream.calls.length;
@@ -175,8 +263,14 @@ test('Responses distinguishes refusal, incomplete output and upstream failure an
   const partialTool = await collect(client.responses.stream({ model, input: 'length-limit', tools, tool_choice: 'required' }));
   assert.equal(partialTool.at(-1).type, 'response.incomplete');
   assert.deepEqual(partialTool.at(-1).response.output, []);
-  for (const [input, code] of [['invalid-tool-name', 'upstream_protocol_error'], ['invalid-tool-arguments', 'upstream_protocol_error'], ['multiple-tool-calls', 'upstream_tool_choice_failed']]) {
-    await assert.rejects(client.responses.create({ model, input, tools }), error => error.status === 502 && error.code === code);
+  for (const [input, code] of [
+    ['invalid-tool-name', 'upstream_protocol_error'], ['invalid-tool-arguments', 'upstream_protocol_error'],
+    ['duplicate-tool-id', 'upstream_protocol_error'], ['truncated-tool-stream', 'upstream_protocol_error'],
+    ['multiple-tool-calls', 'upstream_tool_choice_failed']
+  ]) {
+    if (input !== 'truncated-tool-stream') {
+      await assert.rejects(client.responses.create({ model, input, tools }), error => error.status === 502 && error.code === code);
+    }
     const failed = await collect(client.responses.stream({ model, input, tools }));
     assert.deepEqual(failed.map(event => event.type), ['response.created', 'response.in_progress', 'response.failed']);
     assert.equal(failed.at(-1).response.error.code, code);

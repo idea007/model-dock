@@ -34,7 +34,8 @@ export const ollama = {
     return models;
   },
   async *generate(connection, request, { secret, signal, model }) {
-    for (const key of ['user', 'parallel_tool_calls']) if (request[key] !== undefined) unsupported(key);
+    if (request.user !== undefined) unsupported('user');
+    if (request.parallel_tool_calls === true) unsupported('parallel_tool_calls');
     if (request.tool_choice !== undefined && !['auto', 'none'].includes(request.tool_choice)) unsupported('tool_choice');
     if (request.tools?.length && model.capabilities.tools === false) unsupported('tools');
     if (request.tools?.some(tool => tool.function.strict === true)) unsupported('tools.function.strict');
@@ -50,15 +51,18 @@ export const ollama = {
       const images = parts?.filter(part => part.type === 'image_url').map(part => parseImageDataUrl(part.image_url.url).encoded);
       return { role: message.role === 'developer' ? 'system' : message.role, content,
         ...(images?.length ? { images } : {}),
-        ...(message.tool_calls ? { tool_calls: message.tool_calls.map(call => ({ function: { name: call.function.name, arguments: JSON.parse(call.function.arguments) } })) } : {}),
-        ...(message.role === 'tool' ? { tool_name: callNames.get(message.tool_call_id) } : {}) };
+        ...(message.tool_calls ? { tool_calls: message.tool_calls.map((call, index) => ({ id: call.id,
+          function: { index, name: call.function.name, arguments: JSON.parse(call.function.arguments) } })) } : {}),
+        ...(message.role === 'tool' ? { tool_name: callNames.get(message.tool_call_id), tool_call_id: message.tool_call_id } : {}) };
     });
     const options = Object.fromEntries(['temperature', 'top_p', 'seed', 'stop'].filter(key => request[key] !== undefined).map(key => [key, request[key]]));
     if (request.max_tokens ?? request.max_completion_tokens) options.num_predict = request.max_tokens ?? request.max_completion_tokens;
     // Do not allocate the model's maximum context automatically. Respect Ollama's configured context.
     const body = { model: request.model, messages, stream: true, options,
-      ...(request.tools?.length && request.tool_choice !== 'none' ? { tools: request.tools } : {}),
       ...(request.reasoning_effort !== undefined ? { think: request.reasoning_effort === 'none' ? false : request.reasoning_effort } : {}) };
+    if (request.tools?.length && request.tool_choice !== 'none') {
+      body.tools = request.tools.map(({ type, function: { strict, ...fn } }) => ({ type, function: fn }));
+    }
     if (request.response_format?.type === 'json_object') body.format = 'json';
     if (request.response_format?.type === 'json_schema') body.format = request.response_format.json_schema.schema;
     const response = await fetchUpstream(`${connection.baseUrl}/api/chat`, { method: 'POST', headers: headers(secret), body: JSON.stringify(body), signal });
@@ -69,15 +73,19 @@ export const ollama = {
         const value = JSON.parse(line); if (value.error) throw protocolError();
         if (value.message?.content) yield { type: 'delta', delta: { content: value.message.content } };
         for (const call of value.message?.tool_calls || []) {
-          if (!call.function?.name || !call.function?.arguments || typeof call.function.arguments !== 'object') throw protocolError();
+          const fn = call?.function;
+          if (!fn?.name || !fn.arguments || typeof fn.arguments !== 'object' || Array.isArray(fn.arguments)) throw protocolError();
+          const id = call.id == null || call.id === '' ? `call_${randomUUID()}` : call.id;
           hasTools = true;
-          yield { type: 'delta', delta: { tool_calls: [{ index: index++, id: `call_${randomUUID()}`, type: 'function', function: { name: call.function.name, arguments: JSON.stringify(call.function.arguments) } }] } };
+          yield { type: 'delta', delta: { tool_calls: [{ index: index++, id, type: 'function',
+            function: { name: fn.name, arguments: JSON.stringify(fn.arguments) } }] } };
         }
         if (value.done === true) {
           if ([value.prompt_eval_count, value.eval_count].every(x => Number.isSafeInteger(x) && x >= 0)) yield { type: 'usage', usage: {
             prompt_tokens: value.prompt_eval_count, completion_tokens: value.eval_count, total_tokens: value.prompt_eval_count + value.eval_count
           } };
-          yield { type: 'done', finishReason: hasTools ? 'tool_calls' : value.done_reason === 'length' ? 'length' : 'stop' };
+          const finishReason = ['length', 'content_filter'].includes(value.done_reason) ? value.done_reason : hasTools ? 'tool_calls' : 'stop';
+          yield { type: 'done', finishReason };
           done = true; break;
         }
       }

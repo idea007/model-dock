@@ -144,8 +144,8 @@ Codex 内置认证的适用范围与托管服务不同。商业/托管场景需�
 ## 兼容范围
 
 - `GET /v1/models`
-- `POST /v1/chat/completions` 接受字符串或按顺序排列的内容项，每次只返回一个 choice。支持 JSON、SSE、显式拒答，以及工具调用和结果回传。
-- `POST /v1/responses` 支持模型 API、Ollama 和 Codex 的无状态文本与 SSE。模型 API 和 Codex 每轮最多交接一个函数。使用 `sdk.responses.create()` 调用，默认 `store: false`，由客户端在 `input` 中带回历史。[Responses 示例](docs/api.md#responses)
+- `POST /v1/chat/completions` 接受字符串或按顺序排列的内容项，每次只返回一个 choice。支持 JSON、SSE、显式拒答、工具调用和结果回传。SSE 在整批调用校验通过后交付工具参数。
+- `POST /v1/responses` 支持模型 API、Ollama 和 Codex 的无状态文本与 SSE。支持工具调用的模型每轮最多交接一个函数，由接入应用执行。使用 `sdk.responses.create()` 调用，默认 `store: false`，由客户端在 `input` 中带回历史。[Responses 示例](docs/api.md#responses)
 - 三种后端的视觉模型都可通过用户消息接收 PNG、JPEG 或 WebP Base64 Data URL。Chat Completions 用 `image_url`，Responses 用 `input_image`。省略 `detail` 或传 `auto`。图片和历史均计入 2 MiB JSON 上限。[图片输入示例](docs/api.md#image-input)
 - `POST /v1/images/generations` 支持 Codex 文生图和参考图编辑，每次返回一张 Base64 图片及实际宽高。
 - 上游实际报告的 Token 用量；缺失用量保留未知，不伪造为零。

@@ -25,7 +25,7 @@ See [authorized model metadata](#authorized-model-metadata) for capability field
 
 Send an exact model ID or an existing legacy alias and a `messages` array. Each message uses string `content` or a non-empty array of parts. Model Dock joins pure text arrays in order. A user message can mix `text` and `image_url` parts. Set `n: 1` or omit it. [Image input examples](#image-input)
 
-An assistant message carrying `tool_calls` can omit `content` or set it to `null`. An explicit refusal can also use `content: null`. To resume after a function call, send the assistant's tool calls and all matching `tool` result messages. On Codex the gateway hands off one function per request and the calling app executes it.
+An assistant message carrying `tool_calls` can omit `content` or set it to `null`. An explicit refusal can also use `content: null`. To resume a tool turn, replay the assistant message with its calls, immediately followed by one `role: "tool"` result per call. Put the call's `id` in `tool_call_id` and send a text or serialized JSON result. Use `parallel_tool_calls: false` for a single call at most. Codex applies this limit on every turn.
 
 ```json
 {
@@ -36,13 +36,13 @@ An assistant message carrying `tool_calls` can omit `content` or set it to `null
 
 Each response contains one choice. Text is in `choices[0].message.content`. A function handoff uses `choices[0].message.tool_calls` and `finish_reason: "tool_calls"`. The caller executes the function. An explicit refusal uses `choices[0].message.refusal` and may have `content: null`. A refusal is a valid model response, including when `response_format` requests JSON. Usage is optional and is returned when the provider reports complete counters.
 
-Set `stream: true` for `text/event-stream`. Accumulate `choices[0].delta.content`, `delta.refusal` and `delta.tool_calls` across data frames. A complete stream sends a finish-reason chunk, a separate `choices: []` usage chunk if `stream_options.include_usage` is `true` and counters are available, then `data: [DONE]`. Ignore heartbeat comments. If an error occurs after streaming starts, the final data frame contains the error envelope and the connection closes without `[DONE]`. Treat that outcome, or a disconnect without `[DONE]`, as incomplete.
+Set `stream: true` for `text/event-stream`. Text and refusals arrive as `choices[0].delta.content` and `delta.refusal`. The gateway emits completed, validated tool calls together in one `delta.tool_calls` chunk before `finish_reason: "tool_calls"`. A turn ending with `length` or `content_filter` has no executable tool calls. With `stream_options.include_usage: true`, ordinary chunks have `usage: null` and known counters arrive in a final `choices: []` chunk. A complete stream ends with `data: [DONE]`. Ignore heartbeat comments. If a failure occurs after streaming starts, the last data frame contains the error envelope. Execute calls only after receiving the expected finish reason and `[DONE]`.
 
 For a completed `json_object` response, the gateway checks JSON syntax and requires a top-level object. In `json_schema` mode it checks syntax and passes the schema to the selected adapter. Schema constraints depend on the provider. Handle refusals, tool handoffs and truncated completions before parsing a structured result. See the [compatibility matrix](compatibility.md) for supported fields and provider mappings.
 
 ### Responses
 
-Use `POST /v1/responses` for text or image input with OpenAI-compatible APIs, Ollama and Codex. OpenAI-compatible APIs and Codex can hand off one application function per turn. The gateway uses the same model IDs, project permissions and inference limits as Chat Completions.
+Use `POST /v1/responses` for text or image input with OpenAI-compatible APIs, Ollama and Codex. Tool-capable models can hand off up to one application function per turn. The gateway uses the same model IDs, project permissions and inference limits as Chat Completions.
 
 | Field | Accepted values |
 | --- | --- |
@@ -51,7 +51,7 @@ Use `POST /v1/responses` for text or image input with OpenAI-compatible APIs, Ol
 | `instructions` | Optional string prepended as a system message. Resend it on each request that needs it |
 | `stream` | Optional boolean. Set `true` for SSE |
 | `store` | Omit or set `false`. Keep conversation history in the calling app |
-| `tools`, `tool_choice` | Optional flat function definitions with `type: "function"`, `name` and object-schema `parameters`. Use `auto`, `none`, `required` or `{ "type": "function", "name": "weather" }`. Omitted or null `strict` selects `false`. Explicit strict schemas depend on the upstream and are rejected by Codex |
+| `tools`, `tool_choice` | Optional flat function definitions with `type: "function"`, `name` and object-schema `parameters`. Use `auto` or `none` on all adapters. OpenAI-compatible APIs and Codex also accept `required` and named functions such as `{ "type": "function", "name": "weather" }`. Omitted or null `strict` selects `false`. `strict: true` requires support from the OpenAI-compatible upstream |
 | `parallel_tool_calls` | Omit or set `false` |
 
 The JSON request limit is 2 MiB. The 2048-message limit includes `instructions` when supplied as a non-empty string. State and background fields such as `previous_response_id`, `conversation`, `store: true` and `background` return `400`. The first release accepts the fields above. Other parameters, such as `max_output_tokens` and structured output settings, return `400`. `GET /v1/responses/{id}` returns `404`.
@@ -82,9 +82,9 @@ if (terminal.status === 'failed') throw new Error(terminal.error.message);
 if (terminal.status === 'incomplete') console.error(terminal.incomplete_details.reason);
 ```
 
-Raw JSON puts text and refusals in the message items in `output`. The SDK derives `output_text` from those items. `usage` gives reported input, output and total token counts, or `null` when counts are unavailable. SSE includes `event:` names, increasing `sequence_number`, and stable item IDs and indexes. Read the final `response.completed`, `response.incomplete`, or `response.failed` event for the response snapshot. `incomplete_details.reason` gives `max_output_tokens` or `content_filter` when reported by the adapter. On failure after streaming starts, read `response.error`. A stream that ends without a terminal event has an unknown outcome.
+Raw JSON puts text and refusals in the message items in `output`. The SDK derives `output_text` from those items. `usage` gives reported input, output and total token counts, or `null` when counts are unavailable. The gateway requests counts when streaming through the official OpenAI API. SSE includes `event:` names, increasing `sequence_number`, and stable item IDs and indexes. Read the final `response.completed`, `response.incomplete`, or `response.failed` event for the response snapshot. `incomplete_details.reason` gives `max_output_tokens` or `content_filter` when reported by the adapter. On failure after streaming starts, read `response.error`. A stream that ends without a terminal event has an unknown outcome.
 
-For functions, read the completed `function_call` item from `output`, execute it in the caller, then send the original history, the returned call item, and its result. Use the call's `call_id` for the result. Streamed function arguments are emitted after the gateway validates the complete call.
+For functions, read the `function_call` item in a completed response and execute it in the calling app. With SSE, wait for `response.completed`. Each validated call emits `response.function_call_arguments.delta` with the full JSON argument string, followed by `response.function_call_arguments.done` and `response.output_item.done`. To continue, append the complete prior `output` and one `function_call_output` for the call. Use `call_id` to match the result and a string for `output`. An empty result can use an empty string.
 
 ```js
 const tools = [{
@@ -92,7 +92,7 @@ const tools = [{
   parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] }
 }];
 const history = [{ role: 'user', content: 'What is the weather in Hangzhou?' }];
-const turn = await sdk.responses.create({ model, input: history, tools, tool_choice: 'required' });
+const turn = await sdk.responses.create({ model, input: history, tools, tool_choice: 'auto' });
 const call = turn.output.find(item => item.type === 'function_call');
 if (call) {
   const result = await sdk.responses.create({ model, input: [

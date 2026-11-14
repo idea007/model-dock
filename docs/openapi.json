@@ -260,7 +260,7 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string",
-                  "description": "Each data frame holds a JSON chunk, a JSON error envelope, or the [DONE] sentinel. The stream starts with the assistant role. A completed stream emits a finish reason, an optional final usage chunk with empty choices, and [DONE]. A provider failure after streaming starts uses an error envelope and closes without [DONE]. Heartbeat comments can be ignored."
+                  "description": "Each data frame holds a JSON chunk, a JSON error envelope, or [DONE]. Text and refusal deltas stream as received. Complete tool calls are sent in one chunk after validation and before the tool_calls finish reason. With include_usage enabled, regular chunks carry usage: null followed by a final usage chunk with empty choices if counters are known. A provider failure after streaming starts uses an error envelope and closes without [DONE]."
                 },
                 "x-sse-data-schema": {
                   "oneOf": [
@@ -278,7 +278,7 @@
                 "examples": {
                   "completed": {
                     "summary": "Successful SSE with usage",
-                    "value": "data: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello!\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17}}\n\ndata: [DONE]\n\n"
+                    "value": "data: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}],\"usage\":null}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello!\"},\"finish_reason\":null}],\"usage\":null}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":null}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17}}\n\ndata: [DONE]\n\n"
                   },
                   "refusal": {
                     "summary": "Refusal completes normally",
@@ -338,7 +338,7 @@
       "post": {
         "operationId": "createResponse",
         "summary": "Create a stateless text response",
-        "description": "Create a JSON or streamed text response from text or images. The caller supplies conversation history, including any images used in earlier user messages. OpenAI-compatible and Codex models can hand off one application function per request. Model Dock does not store response items. The gateway cancels inference on disconnect.",
+        "description": "Create a JSON or streamed text response from text or images. The caller supplies conversation history and holds the response items. Tool-capable OpenAI-compatible API, Ollama and Codex models can hand off up to one application function per request. The gateway cancels inference on disconnect.",
         "requestBody": {
           "required": true,
           "x-max-body-bytes": 2097152,
@@ -428,7 +428,7 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string",
-                  "description": "Named events with matching type and increasing sequence_number in data. Each item is added before any content or argument events. The terminal event is response.completed, response.incomplete, or response.failed. Heartbeat comments can be ignored. A connection that closes without a terminal event has an unknown outcome."
+                  "description": "Named events with matching type and increasing sequence_number in data. Each item is added before any content or argument events. Function arguments arrive in a single delta after validation. The terminal event is response.completed, response.incomplete, or response.failed. A connection that closes without a terminal event has an unknown outcome."
                 },
                 "x-sse-data-schema": { "$ref": "#/components/schemas/ResponsesEvent" }
               }
@@ -1048,6 +1048,7 @@
           },
           "stream_options": {
             "type": "object",
+            "description": "Set include_usage to true to request a final chunk with reported counters. Regular chunks then carry usage: null.",
             "required": [
               "include_usage"
             ],
@@ -1144,7 +1145,8 @@
             "description": "Supply the selected function in tools. The required mode needs at least one function."
           },
           "parallel_tool_calls": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Set false for a limit of one function call per turn. OpenAI-compatible upstreams may support true. Ollama and Codex accept false or omission."
           },
           "response_format": {
             "$ref": "#/components/schemas/ChatResponseFormat"
@@ -1674,11 +1676,13 @@
                     },
                     "tool_calls": {
                       "type": "array",
+                      "description": "Contains the complete, validated batch, emitted before finish_reason: tool_calls.",
+                      "minItems": 1,
+                      "maxItems": 128,
                       "items": {
                         "type": "object",
-                        "required": [
-                          "index"
-                        ],
+                        "required": ["index", "id", "type", "function"],
+                        "additionalProperties": false,
                         "properties": {
                           "index": {
                             "type": "integer",
@@ -1693,6 +1697,8 @@
                           },
                           "function": {
                             "type": "object",
+                            "required": ["name", "arguments"],
+                            "additionalProperties": false,
                             "properties": {
                               "name": {
                                 "type": "string"
@@ -1720,7 +1726,7 @@
             }
           },
           "usage": {
-            "$ref": "#/components/schemas/Usage"
+            "oneOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }]
           }
         },
         "if": {
@@ -1731,16 +1737,11 @@
           }
         },
         "then": {
-          "required": [
-            "usage"
-          ]
+          "required": ["usage"],
+          "properties": { "usage": { "$ref": "#/components/schemas/Usage" } }
         },
         "else": {
-          "not": {
-            "required": [
-              "usage"
-            ]
-          }
+          "properties": { "usage": { "type": "null" } }
         }
       },
       "ResponsesRequest": {
@@ -1766,7 +1767,7 @@
           "stream": { "type": "boolean", "default": false },
           "store": { "const": false, "default": false, "description": "The client supplies history for each request." },
           "tools": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/ResponsesFunctionTool" } },
-          "tool_choice": { "$ref": "#/components/schemas/ResponsesToolChoice" },
+          "tool_choice": { "$ref": "#/components/schemas/ResponsesToolChoice", "description": "Ollama supports auto and none. The other adapters also accept required and named functions, subject to the model." },
           "parallel_tool_calls": { "const": false, "default": false, "description": "At most one function can be handed off in a turn." }
         }
       },

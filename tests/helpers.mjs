@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startGateway } from '../apps/gateway/server.mjs';
 
-export async function fixtureUpstream(t, models = [{ id: 'shared' }, { id: 'slow' }, { id: 'broken' }], { ollamaVision = false } = {}) {
+export async function fixtureUpstream(t, models = [{ id: 'shared' }, { id: 'slow' }, { id: 'broken' }], { ollamaVision = false, usageOptIn = false } = {}) {
   const calls = []; let disconnects = 0;
   const server = http.createServer(async (request, response) => {
     const send = value => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
@@ -21,8 +21,27 @@ export async function fixtureUpstream(t, models = [{ id: 'shared' }, { id: 'slow
       : ['completion', 'tools', 'thinking', ...(value.model === 'local:vision' ? ['vision'] : [])], model_info: { 'llama.context_length': 8192 }, parameters: 'num_ctx 2048' });
     if (request.url === '/api/chat') {
       response.writeHead(200, { 'content-type': 'application/x-ndjson' });
-      response.write(JSON.stringify({ message: { content: '本机' }, done: false }) + '\n');
-      response.end(JSON.stringify({ message: { content: '回答' }, done: true, prompt_eval_count: 5, eval_count: 2, done_reason: 'stop' }) + '\n'); return;
+      const frame = value => JSON.stringify(value) + '\n';
+      const last = value.messages.at(-1);
+      const name = value.tools?.[0]?.function.name;
+      let content = '回答', doneReason = 'stop';
+      if (last.role === 'tool') {
+        const call = value.messages.at(-2).tool_calls?.[0];
+        content = call && call.id === last.tool_call_id && call.function.name === last.tool_name
+          ? `工具结果：${last.content}` : 'Missing or mismatched tool result';
+      } else if (name && /^native-tool/.test(last.content)) {
+        const call = { function: { index: 0, name, arguments: {} },
+          ...(last.content === 'native-tool-no-id' ? {} : { id: 'call_native_ollama' }) };
+        const writeTool = (toolCall, text) => response.write(frame({ message: { content: text, tool_calls: [toolCall] }, done: false }));
+        writeTool(call, '我会查询。');
+        if (last.content === 'native-tool-multiple') writeTool({ id: 'call_other', function: { ...call.function, index: 1 } }, '');
+        if (last.content === 'native-tool-length') doneReason = 'length';
+        content = '';
+      } else {
+        response.write(frame({ message: { content: '本机' }, done: false }));
+      }
+      response.end(frame({ message: { content }, done: true, prompt_eval_count: 5, eval_count: 2, done_reason: doneReason }));
+      return;
     }
     if (request.url !== '/v1/chat/completions') { response.writeHead(404); response.end(); return; }
     if (request.headers.authorization !== 'Bearer fixture-upstream') { response.writeHead(401); response.end('private secret should never be reflected'); return; }
@@ -47,6 +66,7 @@ export async function fixtureUpstream(t, models = [{ id: 'shared' }, { id: 'slow
       arguments: ['invalid-tool-arguments', 'length-limit'].includes(prompt) ? '{"city":' : '{"city":"杭州"}'
     } }];
     if (prompt === 'multiple-tool-calls') toolCalls.push({ ...toolCalls[0], id: 'call_2' });
+    if (prompt === 'duplicate-tool-id') toolCalls.push({ ...toolCalls[0] });
     const finishReason = prompt === 'length-limit' ? 'length' : prompt === 'content-filter' ? 'content_filter' : tool && !refuse ? 'tool_calls' : 'stop';
     const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
     if (!value.stream) {
@@ -71,8 +91,12 @@ export async function fixtureUpstream(t, models = [{ id: 'shared' }, { id: 'slow
     }).join('');
     else if (value.response_format) text = event({ content });
     else text = event({ role: 'assistant', content: '你好，' }) + event({ content: '来自测试上游。' });
+    if (prompt === 'truncated-tool-stream') { response.end(text); return; }
     text += `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: finishReason }] })}\r\n\r\n`;
-    text += `data: ${JSON.stringify({ choices: [], usage })}\r\n\r\ndata: [DONE]\r\n\r\n`;
+    if (!usageOptIn || value.stream_options?.include_usage) {
+      text += `data: ${JSON.stringify({ choices: [], usage })}\r\n\r\n`;
+    }
+    text += 'data: [DONE]\r\n\r\n';
     const bytes = Buffer.from(text);
     for (let i = 0; i < bytes.length && !response.destroyed; i += 17) { response.write(bytes.subarray(i, i + 17)); await delay(1); }
     response.end();

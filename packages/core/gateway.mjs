@@ -241,10 +241,6 @@ export class Gateway {
     if (model.capabilities?.image_input === false && normalized.messages.some(message => Array.isArray(message.content))) {
       throw new GatewayError('The selected model does not support image input.', 400, 'unsupported_model_capability', contentParam);
     }
-    if (context.responses && connection.type === 'ollama') {
-      const field = normalized.tools?.length ? 'tools' : normalized.messages.some(message => message.tool_calls) ? 'input' : null;
-      if (field) throw new GatewayError('Ollama function calls are unavailable on /v1/responses.', 400, 'unsupported_parameter', field);
-    }
     const request = applyReasoningPolicy(model, route, normalized);
     const run = this.#startRequest(body.model, principal, model, connection, context);
     let measurement = null, done = false, output = 0;

@@ -130,6 +130,7 @@ test('the public spec examples execute against a scoped gateway and match real r
           for await (const frame of sse(response.body)) frames.push(parseEvent(frame));
           assert.equal(frames.pop(), '[DONE]');
           assert.ok(frames.every(frame => !frame.error));
+          assert.ok(frames.slice(0, -1).every(frame => frame.usage === null));
           assert.deepEqual(frames.at(-1).choices, []);
           assert.equal(frames.at(-1).usage.total_tokens, 12);
         }

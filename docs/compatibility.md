@@ -10,13 +10,13 @@ Model Dock implements OpenAI-compatible text generation from text or images thro
 | Text messages and role history | Forwarded after input normalization | Native roles, with developer mapped to system | Native role history injection |
 | Image input `image_url` | Model-dependent | Model-dependent | Model-dependent |
 | Explicit refusal in response | `message.refusal` in JSON and `delta.refusal` in SSE when reported | Native text output | Native text output |
-| Function tools and results | Forwarded | Model-dependent; function arguments translated | One function handoff per request; caller executes it |
+| Function tools and results | Forwarded | Model-dependent; arguments translated and call IDs preserved or generated | One function handoff per request |
 | JSON object / schema | Provider-dependent | `format` mapping | Native output schema; JSON-object instruction |
 | `temperature`, `top_p`, `seed`, `stop` | Forwarded | Native options | Rejected |
 | `max_tokens` / `max_completion_tokens` | Forwarded (one only) | `num_predict` | Rejected: no enforceable equivalent |
 | `reasoning_effort` | Forwarded | none/low/medium/high; requires supporting model | Validated against the discovered model catalog |
 | `tool_choice` | Forwarded | auto/none only | auto/none/required/specified function |
-| `parallel_tool_calls` | Forwarded | Rejected | false only |
+| `parallel_tool_calls` | Forwarded | `false` limits the turn to one call at most. Omission follows the model. | Omit or use `false` |
 | Tool schema `strict:true` | Forwarded | Rejected | Rejected |
 | Output schema `strict:true` | Forwarded for the provider to enforce | Rejected | Schema passed as native `outputSchema` |
 | `user` | Forwarded | Rejected | Rejected |
@@ -30,13 +30,13 @@ Model Dock implements OpenAI-compatible text generation from text or images thro
 | --- | --- | --- | --- |
 | Stateless text / SSE | Via Chat Completions | Via `/api/chat` | Via temporary threads |
 | Image input `input_image` | Converted to `image_url` | Converted to message `images` | Native image input and history |
-| One application function per turn | Model-dependent | Unavailable | Supported |
-| Function tool choice | `auto`, `none`, `required`, or a named function, subject to the upstream | Function calls unavailable | `auto`, `none`, `required`, or a named function |
-| Function `strict: true` | Forwarded | Function calls unavailable | Rejected |
+| Up to one application function per turn | Model-dependent | Model-dependent via `/api/chat` | Supported |
+| Function tool choice | `auto`, `none`, `required`, or a named function, subject to the upstream | `auto` or `none` | `auto`, `none`, `required`, or a named function |
+| Function `strict: true` | Forwarded | Rejected | Rejected |
 
 All three adapters accept a text prompt or caller-supplied message history. Responses always uses `store: false` and sends that flag to OpenAI-compatible Chat Completions upstreams. Send a completed `function_call` and a matching `function_call_output` with a string result when resuming a tool turn. The caller executes the function. Responses-only upstreams need a separate native adapter. Stored responses, background execution, built-in tools, audio, video, file input, reasoning replay, and `max_output_tokens` are outside this release's request schema. See the [Responses API examples](api.md#responses).
 
-The stream emits typed events and ends with `response.completed`, `response.incomplete` or `response.failed`. Known usage is included in the terminal response; otherwise it is `null`. Partial or invalid tool calls are withheld. The request body limit is 2 MiB, with up to 2048 input items within the shared message and output limits.
+The stream emits typed events and ends with `response.completed`, `response.incomplete` or `response.failed`. The gateway requests usage when streaming through the official OpenAI API. The terminal response carries reported counters or `usage: null`. The request body limit is 2 MiB, with up to 2048 input items within the shared message and output limits.
 
 ## Image input
 
@@ -58,7 +58,9 @@ A gateway `429 connection_busy` includes `Retry-After: 2` and is returned before
 
 An explicit refusal completes normally even when structured output was requested. For other completed text outputs, Model Dock checks JSON syntax in both structured modes and the top-level object type in `json_object` mode. Schema constraints are handled by the upstream or native runtime. Assistant refusal history uses `refusal` and may use `content: null`. The OpenAI-compatible adapter forwards that history. Ollama and Codex can carry the refusal as assistant text.
 
-Chat Completions SSE ends with a finish-reason chunk, an optional usage chunk with `choices: []` when requested and known, then `[DONE]`. The earlier chunks omit `usage`. A failure after streaming starts arrives as `data: {"error": ...}` and closes without `[DONE]`. Treat any Chat Completions stream without the sentinel as incomplete.
+Both endpoints stream text as it arrives and hand off tool calls only after a completed turn and full validation. The caller executes the functions and sends back the results. Ollama tool results include the native `tool_name` and matching `tool_call_id`, and Ollama models must support tools. A declared lack of tool support rejects requests with new tool definitions.
+
+Chat Completions SSE ends with a finish-reason chunk, an optional usage chunk with `choices: []` when requested and known, then `[DONE]`. With `include_usage: true`, earlier chunks include `usage: null`. A failure after streaming starts arrives as `data: {"error": ...}` and closes without `[DONE]`. Treat any Chat Completions stream without the sentinel as incomplete.
 
 The chat request body limit is 2 MiB. Chat supports up to 8 MiB of output, 2048 messages and 128 function definitions. The image endpoint accepts up to 70 MiB of JSON, including a prompt of up to 4,000 characters and up to 50 MiB of decoded references. A single result may be up to 30 MiB before Base64 encoding. The gateway allows up to 32 active requests globally. Per-connection concurrency defaults to 2. Codex allows one active request across text, images and all Codex connections. The connection timeout is configurable from 5 to 1800 seconds.
 

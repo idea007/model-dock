@@ -122,7 +122,7 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
     ${table([t('docs.capabilityParameter'), t('common.modelApi'), 'Ollama', 'Codex'], [
       [t('docs.samplingLimits'), t('docs.forwarded'), t('docs.nativeMapping'), t('docs.unsupported')],
       ['tool_choice', t('docs.forwarded'), 'auto / none', t('docs.namedTool')],
-      ['parallel_tool_calls', t('docs.forwarded'), t('docs.unsupported'), t('docs.onlyFalse')],
+      ['parallel_tool_calls', t('docs.forwarded'), t('docs.onlyFalse'), t('docs.onlyFalse')],
       [t('docs.strictToolSchema'), t('docs.forwarded'), t('docs.unsupported'), t('docs.unsupported')],
       [t('docs.strictOutputSchema'), t('docs.forwarded'), t('docs.unsupported'), t('docs.nativeOutputSchema')],
       ['user', t('docs.forwarded'), t('docs.unsupported'), t('docs.unsupported')]

@@ -87,8 +87,7 @@ export async function createResponse(http, gateway, body, principal, { id, signa
       } else if (event.type === 'done') state.finishReason = event.finishReason;
     }
     const incomplete = incompleteReasons.get(state.finishReason);
-    // Partial tool arguments from an incomplete turn are never handed off.
-    const [tool] = incomplete ? [] : finalizeCompletion(state, request);
+    const [tool] = finalizeCompletion(state, request);
     response.status = incomplete ? 'incomplete' : 'completed';
     response.incomplete_details = incomplete ? { reason: incomplete } : null;
     await finishMessage(response.status);

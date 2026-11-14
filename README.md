@@ -144,8 +144,8 @@ Built-in Codex authentication has a different scope from hosted services. For co
 ## Compatibility
 
 - `GET /v1/models`
-- `POST /v1/chat/completions` accepts text and ordered content parts, with one choice per request. It supports JSON, SSE, explicit refusals, and function calls with tool-result round trips.
-- `POST /v1/responses` supports stateless text and SSE on all three adapters, plus a single function handoff on OpenAI-compatible APIs and Codex. Use `sdk.responses.create()` and carry forward history in `input`. The gateway defaults to `store: false`. [Responses examples](docs/api.md#responses)
+- `POST /v1/chat/completions` accepts text and ordered content parts, with one choice per request. It supports JSON, SSE, explicit refusals, and function calls with result replay. SSE delivers tool calls after the full batch passes validation.
+- `POST /v1/responses` supports stateless text, SSE and up to one function call per turn on tool-capable models across OpenAI-compatible APIs, Ollama and Codex. Use `sdk.responses.create()` and carry forward history in `input` with `store: false`. The calling app executes the function. [Responses examples](docs/api.md#responses)
 - Vision-capable models on all three adapters can read PNG, JPEG or WebP Base64 data URLs in user messages. Use `image_url` with Chat Completions or `input_image` with Responses. Omit `detail` or set it to `auto`. Images and history count toward the 2 MiB JSON limit. [Image input examples](docs/api.md#image-input)
 - `POST /v1/images/generations`: one Base64-encoded image from Codex, with optional reference images.
 - Token usage as reported by the upstream. Missing usage stays unknown rather than being fabricated as zero.

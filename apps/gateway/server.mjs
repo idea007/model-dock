@@ -49,10 +49,12 @@ async function readBody(request, limit = maxInferenceRequestBytes) {
   return object(value);
 }
 async function chat(response, gateway, body, principal, controller, id) {
-  const streaming = body?.stream === true;
+  const streaming = body.stream === true;
+  const includeUsage = body.stream_options?.include_usage === true;
   const state = completionState();
   const created = Math.floor(Date.now() / 1000);
-  const chunk = (delta, finishReason = null) => ({ id, object: 'chat.completion.chunk', created, model: body.model, choices: [{ index: 0, delta, finish_reason: finishReason }] });
+  const chunk = (delta, finishReason = null) => ({ id, object: 'chat.completion.chunk', created, model: body.model,
+    choices: [{ index: 0, delta, finish_reason: finishReason }], ...(includeUsage ? { usage: null } : {}) });
   const emit = value => write(response, `data: ${JSON.stringify(value)}\n\n`, controller.signal);
   let heartbeat, usage;
   try {
@@ -62,14 +64,18 @@ async function chat(response, gateway, body, principal, controller, id) {
         heartbeat = beginStream(response);
         await emit(chunk({ role: 'assistant' }));
       }
-      if (event.type === 'delta' && streaming) await emit(chunk(event.delta));
+      if (event.type === 'delta' && streaming) {
+        const { tool_calls, ...delta } = event.delta;
+        if (!tool_calls?.length || Object.keys(delta).length) await emit(chunk(delta));
+      }
       if (event.type === 'usage') usage = event.usage;
       if (event.type === 'done') state.finishReason = event.finishReason;
     }
     const tools = finalizeCompletion(state, body);
     if (streaming) {
+      if (tools.length) await emit(chunk({ tool_calls: tools.map((tool, index) => ({ index, ...tool })) }));
       await emit(chunk({}, state.finishReason));
-      if (body.stream_options?.include_usage && usage) await emit({ id, object: 'chat.completion.chunk', created, model: body.model, choices: [], usage });
+      if (includeUsage && usage) await emit({ id, object: 'chat.completion.chunk', created, model: body.model, choices: [], usage });
       await write(response, 'data: [DONE]\n\n', controller.signal); response.end();
     } else json(response, 200, { id, object: 'chat.completion', created, model: body.model,
       choices: [{ index: 0, message: { role: 'assistant', content: state.content || (tools.length || state.refusal ? null : ''), ...(tools.length ? { tool_calls: tools } : {}), ...(state.refusal ? { refusal: state.refusal } : {}) }, finish_reason: state.finishReason }],

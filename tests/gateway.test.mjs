@@ -64,7 +64,9 @@ test('official OpenAI JS SDK: JSON, fragmented Unicode SSE, usage and function r
   assert.equal(json.choices[0].message.content, '你好，来自测试上游。'); assert.equal(json.usage.total_tokens, 12);
   let text = '', usage;
   for await (const chunk of await client.chat.completions.create({ model, messages, stream: true, stream_options: { include_usage: true } })) {
-    text += chunk.choices[0]?.delta.content || ''; if (chunk.usage) usage = chunk.usage;
+    text += chunk.choices[0]?.delta.content || '';
+    if (chunk.choices.length) assert.equal(chunk.usage, null);
+    else usage = chunk.usage;
   }
   assert.equal(text, json.choices[0].message.content); assert.equal(usage.total_tokens, 12);
   const call = await client.chat.completions.create({ model, messages, tools });
@@ -76,9 +78,12 @@ test('official OpenAI JS SDK: JSON, fragmented Unicode SSE, usage and function r
   assert.equal(upstream.calls.at(-1).body.n, undefined);
   assert.equal(upstream.calls.at(-1).body.messages.at(-2).content, null);
   assert.equal(upstream.calls.at(-1).body.messages.at(-1).content, '22°C');
-  let argumentsText = '';
-  for await (const chunk of await client.chat.completions.create({ model, messages, tools, stream: true })) argumentsText += chunk.choices[0]?.delta.tool_calls?.[0]?.function?.arguments || '';
-  assert.deepEqual(JSON.parse(argumentsText), { city: '杭州' });
+  const streamedCalls = [];
+  for await (const chunk of await client.chat.completions.create({ model, messages, tools, stream: true })) {
+    assert.equal(chunk.usage, undefined);
+    if (chunk.choices[0]?.delta.tool_calls) streamedCalls.push(chunk.choices[0].delta.tool_calls);
+  }
+  assert.deepEqual(streamedCalls, [[{ index: 0, ...call.choices[0].message.tool_calls[0] }]]);
   assert.equal(upstream.calls.filter(call => call.url === '/v1/chat/completions').at(-1).body.model, 'shared');
   assert.ok(app.gateway.history.every(row => !('messages' in row)));
 });
@@ -131,6 +136,94 @@ test('Ollama uses native capability discovery and respects configured context', 
   assert.deepEqual(sent.messages, messages);
   assert.equal(sent.options.num_predict, 10); assert.equal(sent.options.num_ctx, undefined);
   assert.equal((await app.request('/v1/chat/completions', 'POST', { model, messages, tools, tool_choice: 'required' })).status, 400);
+});
+
+test('Chat streams only completed, validated tool batches and retains OpenAI-compatible parallel calls', async t => {
+  const upstream = await fixtureUpstream(t), app = await setup(t);
+  const model = (await app.connection('openai', upstream.origin + '/v1')) + '/shared';
+  await app.enable(model);
+  const endpoint = '/v1/chat/completions';
+  const client = new OpenAI({ baseURL: `${app.origin}/v1`, apiKey: app.admin, maxRetries: 0 });
+  const params = content => ({ model, messages: [{ role: 'user', content }], tools });
+
+  const streamedCalls = [], reasons = [];
+  const parallel = { ...params('multiple-tool-calls'), parallel_tool_calls: true };
+  for await (const { choices: [choice] } of await client.chat.completions.create({ ...parallel, stream: true })) {
+    if (choice?.delta.tool_calls) streamedCalls.push(choice.delta.tool_calls);
+    if (choice?.finish_reason) reasons.push(choice.finish_reason);
+  }
+  assert.deepEqual(reasons, ['tool_calls']);
+  assert.equal(streamedCalls.length, 1);
+  assert.deepEqual(streamedCalls[0].map(({ index, id, function: fn }) => [index, id, JSON.parse(fn.arguments)]),
+    [[0, 'call_1', { city: '杭州' }], [1, 'call_2', { city: '杭州' }]]);
+  const [choice] = (await client.chat.completions.create(parallel)).choices;
+  assert.deepEqual(choice.message.tool_calls, streamedCalls[0].map(({ index, ...call }) => call));
+  const replay = [...parallel.messages, choice.message, ...choice.message.tool_calls.map(({ id }) => ({
+    role: 'tool', tool_call_id: id, content: '22°C'
+  }))];
+  assert.match((await client.chat.completions.create({ model, messages: replay })).choices[0].message.content, /22°C/);
+  assert.deepEqual(upstream.calls.at(-1).body.messages, replay);
+
+  for (const [prompt, code] of [
+    ['invalid-tool-name', 'upstream_protocol_error'], ['invalid-tool-arguments', 'upstream_protocol_error'],
+    ['duplicate-tool-id', 'upstream_protocol_error'], ['truncated-tool-stream', 'upstream_protocol_error'],
+    ['multiple-tool-calls', 'upstream_tool_choice_failed']
+  ]) {
+    const response = await fetch(app.origin + endpoint, { method: 'POST',
+      headers: { authorization: `Bearer ${app.admin}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ ...params(prompt), stream: true, parallel_tool_calls: false })
+    });
+    const frames = [];
+    for await (const data of sse(response.body)) {
+      assert.notEqual(data, '[DONE]');
+      frames.push(JSON.parse(data));
+    }
+    assert.equal(frames.at(-1).error.code, code);
+    assert.ok(frames.every(frame => !frame.choices?.[0]?.delta.tool_calls));
+    assert.equal(app.gateway.history[0].errorCode, code);
+  }
+  for (const [prompt, finishReason] of [['length-limit', 'length'], ['content-filter', 'content_filter']]) {
+    const request = { ...params(prompt), tool_choice: 'required' };
+    const [incomplete] = (await client.chat.completions.create(request)).choices;
+    assert.equal(incomplete.finish_reason, finishReason);
+    assert.equal(incomplete.message.tool_calls, undefined);
+    let reason;
+    for await (const { choices: [chunk] } of await client.chat.completions.create({ ...request, stream: true })) {
+      assert.equal(chunk?.delta.tool_calls, undefined);
+      if (chunk?.finish_reason) reason = chunk.finish_reason;
+    }
+    assert.equal(reason, finishReason);
+  }
+});
+
+test('Ollama Chat accepts a single tool limit and replays a generated call ID through the SDK', async t => {
+  const upstream = await fixtureUpstream(t), app = await setup(t);
+  const model = (await app.connection('ollama', upstream.origin)) + '/local:small';
+  await app.enable(model);
+  const client = new OpenAI({ baseURL: `${app.origin}/v1`, apiKey: app.admin, maxRetries: 0 });
+  const messages = [{ role: 'user', content: 'native-tool-no-id' }];
+  const params = { model, messages, tools, tool_choice: 'auto', parallel_tool_calls: false };
+  const [choice] = (await client.chat.completions.create(params)).choices;
+  const [call] = choice.message.tool_calls;
+  assert.match(call.id, /^call_[0-9a-f-]+$/);
+  assert.equal(call.function.arguments, '{}');
+  assert.equal(choice.message.content, '我会查询。');
+  assert.equal(choice.finish_reason, 'tool_calls');
+  const replay = [...messages, choice.message, { role: 'tool', tool_call_id: call.id, content: '22°C' }];
+  const answer = await client.chat.completions.create({ model, messages: replay });
+  assert.equal(answer.choices[0].message.content, '工具结果：22°C');
+  assert.deepEqual(upstream.calls.at(-1).body.messages.slice(-2), [
+    { role: 'assistant', content: '我会查询。', tool_calls: [{ id: call.id, function: { index: 0, name: 'weather', arguments: {} } }] },
+    { role: 'tool', content: '22°C', tool_name: 'weather', tool_call_id: call.id }
+  ]);
+
+  const disabled = await client.chat.completions.create({ ...params, tool_choice: 'none' });
+  assert.equal(disabled.choices[0].finish_reason, 'stop');
+  assert.equal(upstream.calls.at(-1).body.tools, undefined);
+  const count = upstream.calls.length;
+  await assert.rejects(client.chat.completions.create({ ...params, parallel_tool_calls: true }),
+    error => error.status === 400 && error.param === 'parallel_tool_calls');
+  assert.equal(upstream.calls.length, count);
 });
 
 test('malformed inputs, unsupported modalities, HTTP destinations and broken histories are rejected', async t => {
