@@ -116,9 +116,10 @@ test('console: login, connection discovery, model publication, scoped key and JS
   click('.connections-endpoint [data-action="copy-endpoint"]');
   assert.equal(clipboard, `${app.origin}/v1`);
   click('.nav [data-view="api"]');
+  assert.equal(document.querySelector('a[href="/openapi.json"]').getAttribute('download'), 'model-dock.openapi.json');
   assert.equal(win.location.search, '?view=api');
   assert.equal(document.querySelector('h1').textContent, '接口文档');
-  assert.equal(document.querySelectorAll('.api-endpoint').length, 4);
+  assert.equal(document.querySelectorAll('.api-endpoint').length, 5);
   assert.equal(document.querySelectorAll('.api-endpoint[open]').length, 0);
   assert.match(document.querySelector('[data-api-id="chat"]').textContent, /当前没有可用的文本模型/);
   assert.match(document.querySelector('#api-code-health-request').textContent, new RegExp(`${app.origin}/healthz`));
@@ -238,6 +239,10 @@ test('console: login, connection discovery, model publication, scoped key and JS
   const exampleBody = JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]);
   assert.equal(exampleBody.model, model.id, 'example uses the currently published model ID');
   assert.deepEqual(exampleBody.messages, [{ role: 'user', content: '你好，请介绍一下你自己。' }]);
+  click('[data-api-id="responses"] > summary');
+  click('[data-code-id="api-code-responses-request"]');
+  assert.ok(clipboard.includes(`${app.origin}/v1/responses`));
+  assert.deepEqual(JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]), { model: model.id, input: exampleBody.messages[0].content, store: false });
   for (const secret of [app.admin, key, 'fixture-upstream']) assert.ok(!document.querySelector('.api-docs').textContent.includes(secret), 'documentation never embeds stored credentials');
   assert.equal(upstream.calls.length, callsBeforeDocs, 'browsing and copying documentation does not invoke providers');
   click('[data-view="playground"]'); fill('model', model.id); fill('prompt', '你好'); submit('#play-form');

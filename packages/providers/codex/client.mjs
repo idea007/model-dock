@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
 import { GatewayError, VERSION } from '../../protocol/index.mjs';
 import { maxImageResultBytes } from '../../protocol/image-options.mjs';
 import { prepareTools, prepareConversation } from './tools.mjs';
@@ -12,13 +13,19 @@ import { createCodexEnvironment } from './environment.mjs';
 const disabled = ['apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'goals', 'hooks', 'in_app_browser', 'multi_agent', 'plugins', 'remote_plugin', 'shell_snapshot', 'shell_tool', 'tool_suggest', 'unified_exec', 'workspace_dependencies'];
 // The native turn can repeat the completed image in its terminal notification.
 const imageLineLimit = (Math.ceil(maxImageResultBytes / 3) * 4 + 64 * 1024) * 2;
+const textOutputLimit = 8 * 1024 * 1024;
 const failure = (code = 'codex_failed', message = 'Codex request failed. Check CLI authentication and version compatibility.', status = 502) => new GatewayError(message, status, code);
 function nativeError(error) {
-  const info = error?.codexErrorInfo;
+  const info = error?.codexErrorInfo ?? error?.data?.codexErrorInfo;
   const kind = typeof info === 'string' ? info : Object.keys(info || {})[0];
-  if (kind === 'usageLimitExceeded') return failure('codex_rate_limited', 'Codex usage limit reached.', 429);
+  if (kind === 'contextWindowExceeded') return failure('context_length_exceeded', 'The request exceeds the Codex model context window.', 400);
+  if (kind === 'badRequest') return failure('codex_bad_request', 'Codex rejected the inference request. Check the model and request parameters.', 400);
+  if (['usageLimitExceeded', 'rateLimitExceeded'].includes(kind)) return failure('codex_rate_limited', 'Codex usage limit reached.', 429);
   if (kind === 'unauthorized') return failure('codex_auth_required', 'Sign in to Codex CLI on this computer first.');
-  if (['responseStreamDisconnected', 'responseStreamConnectionFailed', 'responseTooManyFailedAttempts'].includes(kind)) return failure('codex_connection_failed', 'Codex could not maintain its upstream connection. Check CLI connectivity and HTTPS_PROXY.', 502);
+  if (['httpConnectionFailed', 'responseStreamDisconnected', 'responseStreamConnectionFailed', 'responseTooManyFailedAttempts'].includes(kind)) {
+    if (info[kind]?.httpStatusCode === 429) return failure('codex_rate_limited', 'Codex usage limit reached.', 429);
+    return failure('codex_connection_failed', 'Codex could not maintain its upstream connection. Check CLI connectivity and HTTPS_PROXY.', 502);
+  }
   return failure();
 }
 export class CodexClient {
@@ -26,6 +33,7 @@ export class CodexClient {
     this.binary = options.binary || process.env.CODEX_CLI_PATH || 'codex';
     this.spawnImpl = options.spawnImpl || spawn;
     this.rpcTimeout = options.rpcTimeout || 30_000;
+    this.interruptTimeout = options.interruptTimeout ?? 1000;
     this.imageGeneration = options.imageGeneration === true;
     this.pending = new Map(); this.turns = new Map(); this.nextId = 0;
   }
@@ -58,12 +66,14 @@ export class CodexClient {
     this.child = this.spawnImpl(this.binary, args, { cwd: this.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     const child = this.child;
     child.stderr.on('data', () => {}); // Never forward host paths, account details or credentials.
-    child.stdin.on('error', () => this.#exit(failure('codex_exited')));
-    readline.createInterface({ input: child.stdout }).on('line', line => this.#line(line));
-    child.once('error', () => this.#exit(failure('codex_unavailable', 'Codex CLI could not be started. Install it and sign in first.')));
+    child.stdin.on('error', () => { if (this.child === child) this.#exit(failure('codex_exited')); });
+    readline.createInterface({ input: child.stdout }).on('line', line => { if (this.child === child) this.#line(line); });
+    child.once('error', () => {
+      if (this.child === child) this.#exit(failure('codex_unavailable', 'Codex CLI could not be started. Install it and sign in first.'));
+    });
     child.once('exit', () => {
       if (this.child !== child) return;
-      this.#exit(failure('codex_exited'));
+      this.#exit(failure('codex_exited'), true);
       if (this.started) this.starting = null;
       this.started = false;
       this.child = null;
@@ -156,38 +166,67 @@ export class CodexClient {
   }
   async #runTurn(threadId, { model, effort = null, history, input, outputSchema = null, tools, onDelta, signal }) {
     if (!threadId) throw failure('codex_protocol_error');
-    let resolve, reject;
-    const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); promise.catch(() => {});
-    const state = { threadId, tools, onDelta, resolve, reject, promise, content: '', phases: new Map(), usage: null, events: [], turnId: '', ready: false, handoff: false };
+    const outcome = Promise.withResolvers(), terminal = Promise.withResolvers();
+    outcome.promise.catch(() => {});
+    const state = { threadId, child: this.child, tools, onDelta, outcome, terminal, outputBytes: 0, items: new Map(),
+      usage: null, events: [], requested: false, turnId: null, ended: false, handoff: null };
     this.turns.set(threadId, state);
-    const interrupt = () => {
-      reject(signal.reason || failure('request_cancelled'));
-    };
-    signal.addEventListener('abort', interrupt, { once: true });
+    const abort = () => this.#failTurn(state, signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
     try {
       signal.throwIfAborted();
       if (history?.length) await this.rpc('thread/inject_items', { threadId, items: history }, signal);
       state.requested = true;
-      const turn = await this.rpc('turn/start', { threadId, model, effort, input, outputSchema,
+      const starting = this.rpc('turn/start', { threadId, model, effort, input, outputSchema,
         sandboxPolicy: { type: 'readOnly' } }, signal);
-      state.turnId = turn.turn?.id;
-      if (!state.turnId) throw failure('codex_protocol_error');
-      state.ready = true;
-      for (const [method, params] of state.events.splice(0)) this.#notification(method, params);
-      return await promise;
+      const turn = await Promise.race([starting, outcome.promise]);
+      const turnId = turn?.turn?.id;
+      if (typeof turnId !== 'string' || !turnId) throw failure('codex_protocol_error');
+      state.turnId = turnId;
+      for (const event of state.events.splice(0)) this.#event(event);
+      await outcome.promise;
+      if (state.handoff) {
+        const cleanup = this.#interruptTurn(state);
+        this.#replyError(state.handoff.rpcId, -32000, 'Function execution handed to the API caller.');
+        await cleanup;
+      }
+      signal.throwIfAborted();
+      return this.imageGeneration ? { image: state.image, usage: state.usage }
+        : { finishReason: state.handoff ? 'tool_calls' : 'stop', toolCalls: state.handoff ? [state.handoff.call] : [], usage: state.usage };
     } catch (error) {
-      const interruption = () => this.rpc('turn/interrupt', { threadId, turnId: state.turnId || null },
-        this.imageGeneration ? AbortSignal.timeout(1000) : undefined);
-      if (this.imageGeneration) {
-        // Finish terminating the dedicated process before releasing the Codex slot.
-        if (this.child && state.turnId) await interruption().catch(() => {});
-        await this.stop();
-      } else void interruption().catch(() => {});
+      if (state.requested) {
+        if (this.imageGeneration) {
+          // Restart the dedicated image process on failure, as for previous image requests.
+          if (this.child === state.child) await this.stop();
+          else if (this.stopping) await this.stopping;
+        } else {
+          await this.#interruptTurn(state);
+        }
+      }
       throw error;
     } finally {
-      signal.removeEventListener('abort', interrupt); this.turns.delete(threadId);
-      if (this.child) void this.rpc('thread/unsubscribe', { threadId }).catch(() => {});
+      signal.removeEventListener('abort', abort);
+      this.turns.delete(threadId);
+      if (this.child === state.child && this.child) void this.rpc('thread/unsubscribe', { threadId }).catch(() => {});
     }
+  }
+  async #interruptTurn(state) {
+    if (state.ended || !state.child || this.child !== state.child) return this.stopping;
+    if (state.turnId) {
+      const controller = new AbortController(), { signal } = controller;
+      try {
+        // The RPC reply acknowledges the request. Only turn/completed ends the turn.
+        const requested = this.rpc('turn/interrupt', { threadId: state.threadId, turnId: state.turnId }, signal);
+        await Promise.race([state.terminal.promise, requested.then(() => state.terminal.promise),
+          delay(this.interruptTimeout, undefined, { signal })]);
+      } catch {
+        // If interruption failed and the turn is still live, stop the process below.
+      } finally {
+        controller.abort();
+      }
+    }
+    if (!state.ended && this.child === state.child) await this.stop();
+    else if (this.stopping) await this.stopping;
   }
   rpc(method, params, signal) {
     if (signal?.aborted) return Promise.reject(signal.reason);
@@ -212,84 +251,147 @@ export class CodexClient {
       return;
     }
     let message; try { message = JSON.parse(line); } catch { return; }
+    if (!message || typeof message !== 'object') return;
     if (message.id !== undefined && !message.method) { this.pending.get(message.id)?.(message.error ? nativeError(message.error) : null, message.result); return; }
-    if (message.id !== undefined) {
-      if (message.method === 'item/tool/call' && !this.imageGeneration) { void this.#tool(message); return; }
-      try { this.#write({ id: message.id, error: { code: -32601, message: 'Host operations are disabled.' } }); } catch {}
-      const state = this.turns.get(message.params?.threadId);
-      state?.reject(failure('codex_host_tool_rejected', 'Codex requested a disabled host operation.'));
+    if (message.method) this.#event(message);
+  }
+  #replyError(id, code, message) {
+    try { this.#write({ id, error: { code, message } }); } catch {}
+  }
+  #event(message) {
+    const { method, id } = message, params = message.params ?? {};
+    const state = this.turns.get(params.threadId);
+    const applicationCall = method === 'item/tool/call' && !this.imageGeneration && id !== undefined;
+    if (id !== undefined && !applicationCall) {
+      this.#replyError(id, -32601, 'Host operations are disabled.');
+      if (state && !state.handoff) this.#failTurn(state, failure('codex_host_tool_rejected', 'Codex requested a disabled host operation.'));
       return;
     }
-    if (message.method) this.#notification(message.method, message.params || {});
+    const turnId = params.turnId ?? params.turn?.id;
+    if (!state?.requested || (state.turnId && turnId && turnId !== state.turnId)) {
+      if (applicationCall) this.#replyError(id, -32602, 'Invalid application function request.');
+      return;
+    }
+    if (!state.turnId) {
+      if (state.events.length < 2048) state.events.push(message);
+      else this.#failTurn(state, failure('codex_protocol_error'));
+      return;
+    }
+    if (state.ended) {
+      if (applicationCall) this.#replyError(id, -32602, 'The turn has ended.');
+    } else if (applicationCall) this.#tool(state, id, params);
+    else this.#notification(state, method, params);
   }
-  async #tool(message) {
-    const params = message.params || {}, state = this.turns.get(params.threadId);
+  #tool(state, id, params) {
+    if (state.handoff) {
+      this.#replyError(id, -32000, 'A function has already been handed to the API caller.');
+      return;
+    }
+    if (state.failed) {
+      this.#replyError(id, -32000, 'The request is ending.');
+      return;
+    }
     try {
-      if (!state || !state.requested || state.handoff || !params.turnId || state.turnId && state.turnId !== params.turnId) throw failure('codex_tool_invalid');
-      const call = state.tools.readCall(params); state.handoff = true;
-      await this.rpc('turn/interrupt', { threadId: params.threadId, turnId: params.turnId });
-      this.#write({ id: message.id, error: { code: -32000, message: 'Function execution handed to the API caller.' } });
-      state.resolve({ content: state.content, toolCalls: [call], finishReason: 'tool_calls', usage: state.usage });
+      if (params.turnId !== state.turnId) throw failure('codex_tool_invalid');
+      const call = state.tools.readCall(params);
+      state.handoff = { rpcId: id, call };
+      state.outcome.resolve();
     } catch (error) {
-      try { this.#write({ id: message.id, error: { code: -32602, message: 'Invalid application function request.' } }); } catch {}
-      state?.reject(error);
+      this.#replyError(id, -32602, 'Invalid application function request.');
+      this.#failTurn(state, error);
     }
   }
-  #notification(method, params) {
-    const state = this.turns.get(params.threadId);
-    if (!state || !state.requested) return;
-    if (!state.ready) { if (state.events.length < 2048) state.events.push([method, params]); else state.reject(failure('codex_protocol_error')); return; }
-    const turnId = params.turnId || params.turn?.id;
-    if (turnId && turnId !== state.turnId) return;
+  #failTurn(state, error) {
+    state.failed = true;
+    state.outcome.reject(error);
+  }
+  #notification(state, method, params) {
     if (method === 'thread/tokenUsage/updated') {
       const counters = params.tokenUsage?.total;
       if (counters && ['inputTokens', 'outputTokens', 'totalTokens'].every(key => Number.isSafeInteger(counters[key]) && counters[key] >= 0) && counters.totalTokens >= counters.inputTokens + counters.outputTokens) state.usage = { prompt_tokens: counters.inputTokens, completion_tokens: counters.outputTokens, total_tokens: counters.totalTokens };
       return;
     }
-    if (state.handoff) return;
-    if (this.imageGeneration) {
-      this.#imageNotification(state, method, params);
+    if (method === 'turn/completed') {
+      if (params.turn?.id !== state.turnId || !['completed', 'interrupted', 'failed'].includes(params.turn.status)) {
+        this.#failTurn(state, failure('codex_protocol_error', 'Codex returned an invalid turn status.'));
+        return;
+      }
+      state.ended = true;
+      state.terminal.resolve();
+      if (state.handoff || state.failed) return;
+      if (params.turn.status !== 'completed') this.#failTurn(state, nativeError(params.turn.error));
+      else if (state.tools?.required) this.#failTurn(state, failure('codex_tool_required', 'Codex did not request the required application function.'));
+      else if (!this.imageGeneration && !state.outputBytes) this.#failTurn(state, failure('codex_protocol_error', 'Codex completed without an answer.'));
+      else state.outcome.resolve();
       return;
     }
-    if (method === 'item/started' && params.item?.type === 'agentMessage') state.phases.set(params.item.id, params.item.phase);
-    if (method === 'item/agentMessage/delta' && state.phases.get(params.itemId) !== 'commentary') {
-      const delta = String(params.delta || ''); state.content += delta;
-      if (state.content.length > 8 * 1024 * 1024) { state.reject(failure('output_limit')); return; }
-      state.onDelta(delta);
+    if (state.handoff || state.failed) return;
+    if (method === 'error' && (params.willRetry !== true || state.outputBytes || state.image)) {
+      this.#failTurn(state, nativeError(params.error));
+      return;
     }
-    if (method === 'item/completed' && params.item?.type === 'agentMessage' && params.item.phase !== 'commentary' && !state.content && params.item.text) {
-      state.content = params.item.text; state.onDelta(state.content);
+    if (this.imageGeneration) this.#imageNotification(state, method, params);
+    else this.#textNotification(state, method, params);
+  }
+  #textNotification(state, method, params) {
+    if (method === 'item/agentMessage/delta') {
+      const item = state.items.get(params.itemId);
+      if (item && !item.completed && ['partial_answer', 'final_answer'].includes(item.phase)) this.#appendText(state, item, params.delta);
+      return;
     }
-    if (method === 'error' && (params.willRetry !== true || state.content)) state.reject(nativeError(params.error));
-    if (method === 'turn/completed') {
-      if (params.turn?.status !== 'completed') { state.reject(nativeError(params.turn?.error)); return; }
-      if (state.tools.required) { state.reject(failure('codex_tool_required', 'Codex did not request the required application function.')); return; }
-      state.resolve({ content: state.content, finishReason: 'stop', usage: state.usage });
+    const item = params.item;
+    if (item?.type !== 'agentMessage' || !item.id) return;
+    if (method === 'item/started' && !state.items.has(item.id)) state.items.set(item.id, { phase: item.phase, text: '' });
+    if (method !== 'item/completed') return;
+    const previous = state.items.get(item.id) || { text: '' };
+    if (previous.completed) return;
+    state.items.set(item.id, previous);
+    previous.completed = true;
+    if (item.phase === 'commentary' || previous.phase === 'commentary') return;
+    if (typeof item.text !== 'string' || !item.text.startsWith(previous.text)) {
+      this.#failTurn(state, failure('codex_protocol_error', 'Codex returned inconsistent message text.'));
+      return;
     }
+    this.#appendText(state, previous, item.text.slice(previous.text.length));
+  }
+  #appendText(state, item, text) {
+    if (typeof text !== 'string') {
+      this.#failTurn(state, failure('codex_protocol_error', 'Codex returned invalid message text.'));
+      return;
+    }
+    if (!text) return;
+    state.outputBytes += Buffer.byteLength(text);
+    if (state.outputBytes > textOutputLimit) {
+      this.#failTurn(state, failure('output_limit', 'Codex output exceeds the 8 MiB limit.'));
+      return;
+    }
+    item.text += text;
+    state.onDelta(text);
   }
   #imageNotification(state, method, params) {
     if ((method === 'item/started' || method === 'item/completed') && params.item) {
       const { type, id, status, result } = params.item;
       if (!['userMessage', 'agentMessage', 'reasoning', 'contextCompaction', 'imageGeneration'].includes(type)) {
-        state.reject(failure('codex_host_tool_rejected', 'Codex requested a disabled host operation.'));
+        this.#failTurn(state, failure('codex_host_tool_rejected', 'Codex requested a disabled host operation.'));
         return;
       }
       if (type === 'imageGeneration') {
         if (state.imageItemId && state.imageItemId !== id) {
-          state.reject(failure('codex_protocol_error', 'Codex returned more than one image operation.'));
+          this.#failTurn(state, failure('codex_protocol_error', 'Codex returned more than one image operation.'));
           return;
         }
         state.imageItemId = id;
         if (method === 'item/completed' && status === 'completed') state.image = result;
       }
     }
-    if (method === 'error' && (params.willRetry !== true || state.image)) state.reject(nativeError(params.error));
-    if (method === 'turn/completed') {
-      if (params.turn?.status !== 'completed') state.reject(nativeError(params.turn?.error));
-      else state.resolve({ image: state.image, usage: state.usage });
+  }
+  #exit(error, stopped = false) {
+    for (const done of [...this.pending.values()]) done(error);
+    for (const state of this.turns.values()) {
+      if (stopped) state.terminal.resolve();
+      this.#failTurn(state, error);
     }
   }
-  #exit(error) { for (const done of [...this.pending.values()]) done(error); for (const state of this.turns.values()) state.reject(error); }
   async stop() {
     if (this.stopping) return this.stopping;
     this.stopping = this.#stop().finally(() => { this.stopping = null; });

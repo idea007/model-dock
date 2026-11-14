@@ -1,0 +1,2033 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Model Dock inference API",
+    "version": "0.1.0",
+    "description": "Local gateway for project-authorized models. The API exposes text subsets of OpenAI Chat Completions and Responses, and image generation with a Model Dock reference editing extension. Use the gateway origin and full paths below. The OpenAI SDK base URL ends in /v1."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:4317",
+      "description": "Default gateway origin. Use your gateway origin when running on another port."
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/v1/models": {
+      "get": {
+        "operationId": "listModels",
+        "summary": "List authorized models",
+        "description": "Lists available, published models and legacy aliases authorized for the supplied key. Capability values can be unknown. The catalog is a metadata lookup.",
+        "responses": {
+          "200": {
+            "description": "Authorized model catalog. An empty data array is valid.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCatalog"
+                },
+                "examples": {
+                  "published": {
+                    "summary": "Text and image models",
+                    "value": {
+                      "object": "list",
+                      "data": [
+                        {
+                          "id": "connection-id/model-id",
+                          "object": "model",
+                          "created": 0,
+                          "owned_by": "connection-id",
+                          "name": "Text model",
+                          "source": {
+                            "id": "connection-id",
+                            "name": "Provider connection",
+                            "type": "openai"
+                          },
+                          "capabilities": {
+                            "text": true,
+                            "tools": null,
+                            "structured": null,
+                            "thinking": null
+                          },
+                          "context_window": null,
+                          "reasoning_efforts": [],
+                          "default_reasoning_effort": null
+                        },
+                        {
+                          "id": "connection-id/codex-imagegen",
+                          "object": "model",
+                          "created": 0,
+                          "owned_by": "connection-id",
+                          "name": "codex-imagegen",
+                          "source": {
+                            "id": "connection-id",
+                            "name": "Local Codex",
+                            "type": "codex"
+                          },
+                          "capabilities": {
+                            "text": false,
+                            "tools": false,
+                            "structured": false,
+                            "thinking": false,
+                            "image_generation": true
+                          },
+                          "context_window": null,
+                          "reasoning_efforts": [],
+                          "default_reasoning_effort": null
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "operationId": "createChatCompletion",
+        "summary": "Create a chat completion",
+        "description": "Text-only chat with optional streaming, function calls and structured output. The adapter and model determine which optional parameters are available. The gateway cancels upstream work on disconnect.",
+        "requestBody": {
+          "required": true,
+          "x-max-body-bytes": 2097152,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              },
+              "examples": {
+                "text": {
+                  "summary": "Text completion",
+                  "value": {
+                    "model": "connection-id/model-id",
+                    "messages": [
+                      {
+                        "role": "user",
+                        "content": "Introduce yourself in one sentence."
+                      }
+                    ]
+                  }
+                },
+              "textParts": {
+                "summary": "One choice from ordered text parts",
+                "value": {
+                  "model": "connection-id/model-id",
+                  "n": 1,
+                  "messages": [
+                    {
+                      "role": "user",
+                      "content": [
+                        { "type": "text", "text": "Introduce yourself " },
+                        { "type": "text", "text": "in one sentence." }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "streaming": {
+                  "summary": "Stream with reported usage",
+                  "value": {
+                    "model": "connection-id/model-id",
+                    "messages": [
+                      {
+                        "role": "user",
+                        "content": "Introduce yourself in one sentence."
+                      }
+                    ],
+                    "stream": true,
+                    "stream_options": {
+                      "include_usage": true
+                    }
+                  }
+                },
+                "structured": {
+                  "summary": "Request a JSON object",
+                  "value": {
+                    "model": "connection-id/model-id",
+                    "messages": [
+                      {
+                        "role": "user",
+                        "content": "Return a JSON object with a greeting."
+                      }
+                    ],
+                    "response_format": {
+                      "type": "json_object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "JSON completion by default. Requests with stream true receive server-sent events.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletion"
+                },
+                "examples": {
+                  "text": {
+                    "summary": "Assistant text",
+                    "value": {
+                      "id": "chatcmpl_example",
+                      "created": 1794614400,
+                      "model": "connection-id/model-id",
+                      "object": "chat.completion",
+                      "choices": [
+                        {
+                          "index": 0,
+                          "message": {
+                            "role": "assistant",
+                            "content": "Hello!"
+                          },
+                          "finish_reason": "stop"
+                        }
+                      ],
+                      "usage": {
+                        "prompt_tokens": 12,
+                        "completion_tokens": 5,
+                        "total_tokens": 17
+                      }
+                    }
+                  },
+                  "refusal": {
+                    "summary": "Explicit model refusal",
+                    "value": {
+                      "id": "chatcmpl_example",
+                      "created": 1794614400,
+                      "model": "connection-id/model-id",
+                      "object": "chat.completion",
+                      "choices": [
+                        {
+                          "index": 0,
+                          "message": {
+                            "role": "assistant",
+                            "content": null,
+                            "refusal": "I cannot help with that request."
+                          },
+                          "finish_reason": "stop"
+                        }
+                      ],
+                      "usage": {
+                        "prompt_tokens": 12,
+                        "completion_tokens": 5,
+                        "total_tokens": 17
+                      }
+                    }
+                  }
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "Each data frame holds a JSON chunk, a JSON error envelope, or the [DONE] sentinel. The stream starts with the assistant role. A completed stream emits a finish reason, an optional final usage chunk with empty choices, and [DONE]. A provider failure after streaming starts uses an error envelope and closes without [DONE]. Heartbeat comments can be ignored."
+                },
+                "x-sse-data-schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionChunk"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ErrorEnvelope"
+                    },
+                    {
+                      "const": "[DONE]"
+                    }
+                  ]
+                },
+                "examples": {
+                  "completed": {
+                    "summary": "Successful SSE with usage",
+                    "value": "data: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello!\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17}}\n\ndata: [DONE]\n\n"
+                  },
+                  "refusal": {
+                    "summary": "Refusal completes normally",
+                    "value": "data: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"refusal\":\"I cannot help with that request.\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+                  },
+                  "failed": {
+                    "summary": "Failure after a partial response",
+                    "value": "data: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_example\",\"created\":1794614400,\"model\":\"connection-id/model-id\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Partial output\"},\"finish_reason\":null}]}\n\ndata: {\"error\":{\"message\":\"Upstream returned an incomplete or invalid response.\",\"type\":\"server_error\",\"code\":\"upstream_protocol_error\",\"param\":null}}\n\n"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/ModelUnavailable"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "499": {
+            "$ref": "#/components/responses/Cancelled"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
+          }
+        }
+      }
+    },
+    "/v1/responses": {
+      "post": {
+        "operationId": "createResponse",
+        "summary": "Create a stateless text response",
+        "description": "Create a JSON or streamed text response using a published model. The caller supplies conversation history. OpenAI-compatible and Codex models can hand off one application function per request. Ollama supports text. Model Dock does not store response items. The gateway cancels inference on disconnect.",
+        "requestBody": {
+          "required": true,
+          "x-max-body-bytes": 2097152,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ResponsesRequest" },
+              "examples": {
+                "text": {
+                  "summary": "Stateless text",
+                  "value": { "model": "connection-id/model-id", "input": "Say hello." }
+                },
+                "streaming": {
+                  "summary": "Stream with caller-supplied history",
+                  "value": {
+                    "model": "connection-id/model-id",
+                    "input": [
+                      { "role": "user", "content": "Say hello." },
+                      { "type": "message", "role": "assistant", "content": [{ "type": "output_text", "text": "Hello!", "annotations": [], "logprobs": [] }] },
+                      { "role": "user", "content": [{ "type": "input_text", "text": "Say it again." }] }
+                    ],
+                    "instructions": "Answer briefly.",
+                    "store": false,
+                    "stream": true
+                  }
+                },
+                "function": {
+                  "summary": "Request an application function",
+                  "value": {
+                    "model": "connection-id/model-id",
+                    "input": "Check the weather in Hangzhou.",
+                    "tools": [{ "type": "function", "name": "weather", "strict": false, "parameters": { "type": "object", "properties": { "city": { "type": "string" } } } }],
+                    "tool_choice": { "type": "function", "name": "weather" }
+                  }
+                },
+                "functionOutput": {
+                  "summary": "Continue with a function result",
+                  "value": {
+                    "model": "connection-id/model-id",
+                    "input": [
+                      { "role": "user", "content": "Check the weather in Hangzhou." },
+                      { "type": "function_call", "id": "fc_example", "call_id": "call_example", "name": "weather", "arguments": "{\"city\":\"Hangzhou\"}", "status": "completed" },
+                      { "type": "function_call_output", "call_id": "call_example", "output": "22 degrees Celsius." }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A JSON Response object or named server-sent events. Inspect the terminal status for the output or the reason it ended early.",
+            "headers": { "x-request-id": { "$ref": "#/components/headers/RequestId" } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ResponsesResult" },
+                "examples": {
+                  "text": {
+                    "summary": "Completed text response",
+                    "value": {
+                      "id": "resp_example", "object": "response", "model": "connection-id/model-id", "created_at": 1794614400,
+                      "status": "completed", "error": null, "incomplete_details": null, "store": false, "instructions": null,
+                      "output": [{ "id": "msg_example", "type": "message", "role": "assistant", "status": "completed", "content": [{ "type": "output_text", "text": "Hello!", "annotations": [], "logprobs": [] }] }],
+                      "usage": { "input_tokens": 5, "output_tokens": 2, "total_tokens": 7 },
+                      "tools": [], "tool_choice": "auto", "parallel_tool_calls": false, "text": { "format": { "type": "text" } },
+                      "temperature": null, "top_p": null, "metadata": null, "access_programs": null
+                    }
+                  }
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "Named events with matching type and increasing sequence_number in data. Each item is added before any content or argument events. The terminal event is response.completed, response.incomplete, or response.failed. Heartbeat comments can be ignored. A connection that closes without a terminal event has an unknown outcome."
+                },
+                "x-sse-data-schema": { "$ref": "#/components/schemas/ResponsesEvent" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/ModelUnavailable" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "413": { "$ref": "#/components/responses/TooLarge" },
+          "415": { "$ref": "#/components/responses/UnsupportedMediaType" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "499": { "$ref": "#/components/responses/Cancelled" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "502": { "$ref": "#/components/responses/UpstreamError" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" },
+          "504": { "$ref": "#/components/responses/Timeout" }
+        }
+      }
+    },
+    "/v1/images/generations": {
+      "post": {
+        "operationId": "createImage",
+        "summary": "Generate an image or edit references",
+        "description": "Returns a single Base64 image from a published Codex image model. Use images.generate() with an OpenAI SDK for basic generation. Reference-based editing uses the Model Dock reference_images extension on this JSON endpoint. The standard /v1/images/edits endpoint returns 404.",
+        "requestBody": {
+          "required": true,
+          "x-max-body-bytes": 73400320,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageRequest"
+              },
+              "examples": {
+                "generation": {
+                  "summary": "Generate one image",
+                  "value": {
+                    "model": "connection-id/codex-imagegen",
+                    "prompt": "A blue ceramic cup on a light background",
+                    "n": 1,
+                    "response_format": "b64_json"
+                  }
+                },
+                "edit": {
+                  "summary": "Edit a local reference encoded as a data URL",
+                  "value": {
+                    "model": "connection-id/codex-imagegen",
+                    "prompt": "Keep the subject from image 1 and change its color to green.",
+                    "reference_images": [
+                      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDxoAAAAASUVORK5CYII="
+                    ],
+                    "background": "transparent"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One image. The response reports its actual pixel dimensions and encoding.",
+            "headers": {
+              "x-request-id": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageResult"
+                },
+                "examples": {
+                  "png": {
+                    "summary": "PNG result",
+                    "value": {
+                      "created": 1794614400,
+                      "output_format": "png",
+                      "data": [
+                        {
+                          "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDxoAAAAASUVORK5CYII=",
+                          "width": 1,
+                          "height": 1
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/ModelUnavailable"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "499": {
+            "$ref": "#/components/responses/Cancelled"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Use a scoped Model Dock project key for SDK and application calls. The local administrator token or an active console session also authenticates local inference."
+      }
+    },
+    "headers": {
+      "RequestId": {
+        "description": "Opaque Model Dock request ID for troubleshooting. Correlate it with the gateway request history when present.",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "RetryAfter": {
+        "description": "For connection_busy, 2 seconds. For upstream_rate_limited, the valid upstream delay in seconds or IMF-fixdate when provided. Codex quota errors can omit this header.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "2"
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Malformed JSON, unsupported parameters, or provider request rejection. Codex uses context_length_exceeded for context limits and codex_bad_request for native bad requests. Check error.param when provided.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "No valid bearer token or the key was revoked during the request.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The key lacks model access, or the request is rejected by the local Host or Origin check.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "ModelUnavailable": {
+        "description": "The requested model is unknown, disabled, or unavailable to execute.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The connection was removed during inference or the chat reasoning policy needs to be updated.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "TooLarge": {
+        "description": "The JSON body or the decoded image references exceed a size limit.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "UnsupportedMediaType": {
+        "description": "Send a JSON body with Content-Type application/json.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Gateway capacity or provider quota. Use the code to identify the source.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "examples": {
+              "gatewayCapacity": {
+                "summary": "Gateway capacity, before provider submission",
+                "value": {
+                  "error": {
+                    "message": "This connection is at capacity. Retry after the active request finishes.",
+                    "type": "invalid_request_error",
+                    "code": "connection_busy",
+                    "param": null
+                  }
+                }
+              },
+              "providerLimit": {
+                "summary": "HTTP provider rate limit",
+                "value": {
+                  "error": {
+                    "message": "Upstream rejected the request (HTTP 429).",
+                    "type": "invalid_request_error",
+                    "code": "upstream_rate_limited",
+                    "param": null
+                  }
+                }
+              },
+              "codexLimit": {
+                "summary": "Codex account usage limit",
+                "value": {
+                  "error": {
+                    "message": "Codex usage limit reached.",
+                    "type": "invalid_request_error",
+                    "code": "codex_rate_limited",
+                    "param": null
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "Cancelled": {
+        "description": "An administrator cancelled the active request. When the client disconnects it cannot read a response.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Unexpected gateway error. Use the request ID to investigate.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "UpstreamError": {
+        "description": "Provider authentication, connection, protocol, output, or model runtime failure. Codex uses codex_protocol_error for missing or inconsistent answer text.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "description": "Gateway shutting down or native Codex image generation currently unavailable.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "Timeout": {
+        "description": "The configured provider deadline elapsed. The provider outcome may be unknown.",
+        "headers": {
+          "x-request-id": {
+            "$ref": "#/components/headers/RequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ModelCatalog": {
+        "type": "object",
+        "required": [
+          "object",
+          "data"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "object": {
+            "const": "list"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/PublishedModel"
+                },
+                {
+                  "$ref": "#/components/schemas/LegacyAlias"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ModelIdentity": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "created",
+          "owned_by"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Use the full ID in subsequent calls. Native IDs include the connection prefix."
+          },
+          "object": {
+            "const": "model"
+          },
+          "created": {
+            "const": 0,
+            "description": "The source creation time is unspecified."
+          },
+          "owned_by": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "PublishedModel": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ModelIdentity"
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "source",
+              "capabilities",
+              "context_window",
+              "reasoning_efforts",
+              "default_reasoning_effort"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "source": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "name",
+                  "type"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "openai",
+                      "ollama",
+                      "codex"
+                    ]
+                  }
+                }
+              },
+              "capabilities": {
+                "$ref": "#/components/schemas/ModelCapabilities"
+              },
+              "context_window": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "description": "Reported token context window. A null value means unknown."
+              },
+              "reasoning_efforts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Model levels exposed by the current publication policy."
+              },
+              "default_reasoning_effort": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        ],
+        "unevaluatedProperties": false
+      },
+      "LegacyAlias": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ModelIdentity"
+          },
+          {
+            "type": "object",
+            "required": [
+              "legacy_alias"
+            ],
+            "properties": {
+              "legacy_alias": {
+                "const": true
+              }
+            }
+          }
+        ],
+        "unevaluatedProperties": false
+      },
+      "ModelCapabilities": {
+        "type": "object",
+        "required": [
+          "text",
+          "tools",
+          "structured",
+          "thinking"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tools": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "structured": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "thinking": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "image_generation": {
+            "const": true,
+            "description": "Present for Codex image models."
+          }
+        }
+      },
+      "ChatRequest": {
+        "type": "object",
+        "required": [
+          "model",
+          "messages"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "Authorized full model ID or a legacy alias."
+          },
+          "messages": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2048,
+            "items": {
+              "$ref": "#/components/schemas/ChatHistoryMessage"
+            }
+          },
+          "n": {
+            "type": "integer",
+            "const": 1,
+            "default": 1,
+            "description": "A request always returns one choice, even when n is omitted."
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false
+          },
+          "stream_options": {
+            "type": "object",
+            "required": [
+              "include_usage"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "include_usage": {
+                "type": "boolean"
+              }
+            }
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000,
+            "deprecated": true
+          },
+          "max_completion_tokens": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "top_p": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "stop": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "maxItems": 4,
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "tools": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/FunctionTool"
+            }
+          },
+          "tool_choice": {
+            "oneOf": [
+              {
+                "enum": [
+                  "auto",
+                  "none",
+                  "required"
+                ]
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type",
+                  "function"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "const": "function"
+                  },
+                  "function": {
+                    "type": "object",
+                    "required": [
+                      "name"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "description": "Supply the selected function in tools. The required mode needs at least one function."
+          },
+          "parallel_tool_calls": {
+            "type": "boolean"
+          },
+          "response_format": {
+            "$ref": "#/components/schemas/ChatResponseFormat"
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30,
+            "description": "Availability and default depend on the model and publication policy."
+          },
+          "user": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "not": {
+          "required": [
+            "max_tokens",
+            "max_completion_tokens"
+          ]
+        },
+        "if": {
+          "required": [
+            "stream_options"
+          ]
+        },
+        "then": {
+          "required": [
+            "stream"
+          ],
+          "properties": {
+            "stream": {
+              "const": true
+            }
+          }
+        },
+        "description": "Requests return one choice and accept strings or ordered text content parts. Provider support varies by field and model. Undeclared fields are rejected."
+      },
+      "ChatHistoryMessage": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "enum": [
+              "system",
+              "developer",
+              "user",
+              "assistant",
+              "tool"
+            ]
+          },
+          "content": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" },
+              {
+                "type": "array",
+                "minItems": 1,
+                "items": { "$ref": "#/components/schemas/TextContentPart" }
+              }
+            ],
+            "description": "Text parts are joined in order without inserting delimiters. An assistant tool-call message may omit content."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "tool_call_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "ID of the matching pending tool call."
+          },
+          "tool_calls": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/FunctionCall"
+            }
+          },
+          "refusal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "anyOf": [
+              { "required": ["content"] },
+              { "properties": { "role": { "const": "assistant" } }, "required": ["tool_calls"] }
+            ]
+          },
+          {
+            "if": {
+              "properties": {
+                "role": {
+                  "const": "assistant"
+                }
+              }
+            },
+            "else": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "tool_calls"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "refusal"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "role": {
+                  "const": "tool"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "tool_call_id"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "tool_call_id"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "required": ["content"],
+              "properties": {
+                "content": {
+                  "const": null
+                }
+              }
+            },
+            "then": {
+              "anyOf": [
+                {
+                  "required": [
+                    "tool_calls"
+                  ]
+                },
+                {
+                  "required": [
+                    "refusal"
+                  ],
+                  "properties": {
+                    "refusal": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "description": "Supply a tool result for every call before the next ordinary message. Function call IDs must be unique throughout the history."
+      },
+      "TextContentPart": {
+        "type": "object",
+        "required": ["type", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "text" },
+          "text": { "type": "string" }
+        }
+      },
+      "FunctionTool": {
+        "type": "object",
+        "required": [
+          "type",
+          "function"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "function"
+          },
+          "function": {
+            "type": "object",
+            "required": [
+              "name",
+              "parameters"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              "description": {
+                "type": "string"
+              },
+              "parameters": {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "object"
+                  }
+                },
+                "description": "JSON Schema for the function input."
+              },
+              "strict": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "FunctionCall": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "function"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "const": "function"
+          },
+          "function": {
+            "type": "object",
+            "required": [
+              "name",
+              "arguments"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "arguments": {
+                "type": "string",
+                "description": "A serialized JSON object. Validate application-specific arguments before calling the function."
+              }
+            }
+          }
+        }
+      },
+      "ChatResponseFormat": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "enum": [
+                  "text",
+                  "json_object"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "json_schema"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "json_schema"
+              },
+              "json_schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "schema"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "schema": {
+                    "type": "object"
+                  },
+                  "strict": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "For completed responses with finish_reason stop, the gateway checks JSON syntax and requires a top-level object in json_object mode. Upstream handles schema constraints. Refusals have a dedicated field."
+      },
+      "Usage": {
+        "type": "object",
+        "required": [
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "prompt_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completion_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ChatCompletion": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "created",
+          "model",
+          "choices"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "object": {
+            "const": "chat.completion"
+          },
+          "created": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix time in seconds."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "choices": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "index",
+                "message",
+                "finish_reason"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "index": {
+                  "const": 0
+                },
+                "message": {
+                  "type": "object",
+                  "required": [
+                    "role",
+                    "content"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "role": {
+                      "const": "assistant"
+                    },
+                    "content": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "refusal": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Explicit model refusal when reported by the provider."
+                    },
+                    "tool_calls": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "$ref": "#/components/schemas/FunctionCall"
+                      }
+                    }
+                  }
+                },
+                "finish_reason": {
+                  "enum": [
+                    "stop",
+                    "length",
+                    "tool_calls",
+                    "content_filter"
+                  ]
+                }
+              }
+            }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage",
+            "description": "Omitted when the provider does not report complete counters."
+          }
+        }
+      },
+      "ChatCompletionChunk": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "created",
+          "model",
+          "choices"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "object": {
+            "const": "chat.completion.chunk"
+          },
+          "created": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix time in seconds."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "choices": {
+            "type": "array",
+            "maxItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "index",
+                "delta",
+                "finish_reason"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "index": {
+                  "const": 0
+                },
+                "delta": {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "const": "assistant"
+                    },
+                    "content": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "refusal": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "tool_calls": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "index"
+                        ],
+                        "properties": {
+                          "index": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 127
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "function"
+                          },
+                          "function": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "arguments": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "finish_reason": {
+                  "enum": [
+                    "stop",
+                    "length",
+                    "tool_calls",
+                    "content_filter",
+                    null
+                  ]
+                }
+              }
+            }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          }
+        },
+        "if": {
+          "properties": {
+            "choices": {
+              "maxItems": 0
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "usage"
+          ]
+        },
+        "else": {
+          "not": {
+            "required": [
+              "usage"
+            ]
+          }
+        }
+      },
+      "ResponsesRequest": {
+        "type": "object",
+        "required": ["model", "input"],
+        "additionalProperties": false,
+        "properties": {
+          "model": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Authorized full model ID or a legacy alias." },
+          "input": {
+            "description": "A user prompt or ordered, self-contained history. Function results reference a preceding function call by call_id. Include all results before adding the next message.",
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              { "type": "array", "minItems": 1, "maxItems": 2048, "items": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/ResponsesInputMessage" },
+                  { "$ref": "#/components/schemas/ResponsesFunctionCall", "properties": { "status": { "const": "completed" } } },
+                  { "$ref": "#/components/schemas/ResponsesFunctionOutput" }
+                ]
+              } }
+            ]
+          },
+          "instructions": { "type": ["string", "null"], "description": "Prepend these instructions to the text history for this request." },
+          "stream": { "type": "boolean", "default": false },
+          "store": { "const": false, "default": false, "description": "The client supplies history for each request." },
+          "tools": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/ResponsesFunctionTool" } },
+          "tool_choice": { "$ref": "#/components/schemas/ResponsesToolChoice" },
+          "parallel_tool_calls": { "const": false, "default": false, "description": "At most one function can be handed off in a turn." }
+        }
+      },
+      "ResponsesInputMessage": {
+        "type": "object",
+        "required": ["role", "content"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "message" },
+          "role": { "enum": ["system", "developer", "user", "assistant"] },
+          "id": { "type": "string", "description": "Optional item ID accepted when replaying output." },
+          "status": { "enum": ["completed", "incomplete"] },
+          "content": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "minItems": 1, "items": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/ResponsesInputText" },
+                  { "$ref": "#/components/schemas/ResponsesContentPart" }
+                ]
+              } }
+            ]
+          }
+        },
+        "if": { "properties": { "role": { "enum": ["system", "developer", "user"] } } },
+        "then": { "properties": { "content": { "items": { "$ref": "#/components/schemas/ResponsesInputText" } } } }
+      },
+      "ResponsesInputText": {
+        "type": "object",
+        "required": ["type", "text"],
+        "additionalProperties": false,
+        "properties": { "type": { "const": "input_text" }, "text": { "type": "string" } }
+      },
+      "ResponsesContentPart": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["type", "text"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "output_text" }, "text": { "type": "string" },
+              "annotations": { "type": "array", "maxItems": 0 }, "logprobs": { "type": "array", "maxItems": 0 },
+              "parsed": { "description": "SDK-derived field accepted for input replay and ignored." }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "refusal"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "refusal" }, "refusal": { "type": "string", "minLength": 1 },
+              "parsed": { "description": "SDK-derived field accepted for input replay and ignored." }
+            }
+          }
+        ]
+      },
+      "ResponsesFunctionTool": {
+        "type": "object",
+        "required": ["type", "name", "parameters"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "function" }, "name": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" },
+          "description": { "type": "string" }, "strict": { "type": ["boolean", "null"], "default": false, "description": "Omission or null selects false. An explicit true depends on the upstream and is rejected by Codex." },
+          "parameters": { "type": "object", "required": ["type"], "properties": { "type": { "const": "object" } } }
+        }
+      },
+      "ResponsesToolChoice": {
+        "oneOf": [
+          { "enum": ["auto", "none", "required"] },
+          {
+            "type": "object",
+            "required": ["type", "name"],
+            "additionalProperties": false,
+            "properties": { "type": { "const": "function" }, "name": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" } }
+          }
+        ]
+      },
+      "ResponsesFunctionCall": {
+        "type": "object",
+        "required": ["type", "call_id", "name", "arguments"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "function_call" }, "id": { "type": "string", "description": "Output item ID used by streaming events." },
+          "call_id": { "type": "string", "minLength": 1, "maxLength": 200, "description": "Use this value in the function_call_output item." },
+          "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "arguments": { "type": "string", "description": "JSON-encoded object. The initial streamed item has an empty arguments string." },
+          "status": { "enum": ["in_progress", "completed"], "description": "For replay, omit status or use completed." },
+          "parsed_arguments": { "description": "SDK-derived field accepted for input replay and ignored." }
+        }
+      },
+      "ResponsesFunctionOutput": {
+        "type": "object",
+        "required": ["type", "call_id", "output"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "function_call_output" }, "id": { "type": "string" }, "status": { "const": "completed" },
+          "call_id": { "type": "string", "minLength": 1, "maxLength": 200 }, "output": { "type": "string" }
+        }
+      },
+      "ResponsesOutputItem": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["type", "id", "role", "status", "content"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "const": "message" }, "id": { "type": "string" }, "role": { "const": "assistant" },
+              "status": { "enum": ["in_progress", "completed", "incomplete"] },
+              "content": { "type": "array", "items": { "$ref": "#/components/schemas/ResponsesContentPart" } }
+            }
+          },
+          { "$ref": "#/components/schemas/ResponsesFunctionCall", "required": ["id", "status"] }
+        ]
+      },
+      "ResponsesResult": {
+        "type": "object",
+        "required": ["id", "object", "created_at", "model", "status", "output", "error", "incomplete_details", "usage", "store", "instructions", "tools", "tool_choice", "parallel_tool_calls", "text", "temperature", "top_p", "metadata", "access_programs"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "description": "Opaque response and gateway request ID." },
+          "object": { "const": "response" }, "created_at": { "type": "integer", "minimum": 0 }, "model": { "type": "string" },
+          "status": { "enum": ["in_progress", "completed", "incomplete", "failed"] },
+          "output": { "type": "array", "maxItems": 2, "items": { "$ref": "#/components/schemas/ResponsesOutputItem" } },
+          "error": {
+            "type": ["object", "null"], "required": ["code", "message"], "additionalProperties": false,
+            "properties": { "code": { "type": "string" }, "message": { "type": "string" } }
+          },
+          "incomplete_details": {
+            "type": ["object", "null"], "required": ["reason"], "additionalProperties": false,
+            "properties": { "reason": { "enum": ["max_output_tokens", "content_filter"] } }
+          },
+          "usage": {
+            "type": ["object", "null"], "required": ["input_tokens", "output_tokens", "total_tokens"], "additionalProperties": false,
+            "description": "Reported token counts, or null when unavailable. No estimates or inferred breakdowns.",
+            "properties": {
+              "input_tokens": { "type": "integer", "minimum": 0 }, "output_tokens": { "type": "integer", "minimum": 0 },
+              "total_tokens": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "store": { "const": false }, "instructions": { "type": ["string", "null"] },
+          "tools": { "type": "array", "items": { "$ref": "#/components/schemas/ResponsesFunctionTool" } },
+          "tool_choice": { "$ref": "#/components/schemas/ResponsesToolChoice" }, "parallel_tool_calls": { "const": false },
+          "text": { "const": { "format": { "type": "text" } } }, "temperature": { "type": "null" }, "top_p": { "type": "null" },
+          "metadata": { "type": "null" }, "access_programs": { "type": "null" }
+        }
+      },
+      "ResponsesEvent": {
+        "type": "object",
+        "required": ["type", "sequence_number"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "type": "string" }, "sequence_number": { "type": "integer", "minimum": 0 },
+          "response": { "$ref": "#/components/schemas/ResponsesResult" },
+          "item": { "$ref": "#/components/schemas/ResponsesOutputItem" },
+          "output_index": { "type": "integer", "minimum": 0 }, "content_index": { "type": "integer", "minimum": 0 },
+          "item_id": { "type": "string" }, "part": { "$ref": "#/components/schemas/ResponsesContentPart" },
+          "delta": { "type": "string" }, "text": { "type": "string" }, "refusal": { "type": "string" },
+          "arguments": { "type": "string" }, "name": { "type": "string" }, "logprobs": { "type": "array", "maxItems": 0 }
+        },
+        "oneOf": [
+          { "properties": { "type": { "enum": ["response.created", "response.in_progress", "response.completed", "response.incomplete", "response.failed"] } }, "required": ["response"] },
+          { "properties": { "type": { "enum": ["response.output_item.added", "response.output_item.done"] } }, "required": ["output_index", "item"] },
+          { "properties": { "type": { "enum": ["response.content_part.added", "response.content_part.done"] } }, "required": ["item_id", "output_index", "content_index", "part"] },
+          { "properties": { "type": { "const": "response.output_text.delta" } }, "required": ["item_id", "output_index", "content_index", "delta", "logprobs"] },
+          { "properties": { "type": { "const": "response.output_text.done" } }, "required": ["item_id", "output_index", "content_index", "text", "logprobs"] },
+          { "properties": { "type": { "const": "response.refusal.delta" } }, "required": ["item_id", "output_index", "content_index", "delta"] },
+          { "properties": { "type": { "const": "response.refusal.done" } }, "required": ["item_id", "output_index", "content_index", "refusal"] },
+          { "properties": { "type": { "const": "response.function_call_arguments.delta" } }, "required": ["item_id", "output_index", "delta"] },
+          { "properties": { "type": { "const": "response.function_call_arguments.done" } }, "required": ["item_id", "output_index", "name", "arguments"] }
+        ]
+      },
+      "ImageRequest": {
+        "type": "object",
+        "required": [
+          "model",
+          "prompt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "Full ID of an authorized Codex image model."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "pattern": "\\S",
+            "description": "The gateway counts UTF-16 code units. Refer to attachments by their order starting at 1."
+          },
+          "n": {
+            "type": "integer",
+            "const": 1,
+            "default": 1
+          },
+          "response_format": {
+            "const": "b64_json",
+            "default": "b64_json"
+          },
+          "aspect_ratio": {
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:5"
+            ],
+            "description": "Requested canvas ratio. Omit it to let Codex choose."
+          },
+          "background": {
+            "enum": [
+              "auto",
+              "transparent"
+            ],
+            "description": "Requests that Codex choose a background or attempt transparency."
+          },
+          "reference_images": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "string",
+              "pattern": "^[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]/(?:[pP][nN][gG]|[jJ][pP][eE][gG]|[wW][eE][bB][pP]);[bB][aA][sS][eE]64,[A-Za-z0-9+/]+={0,2}$"
+            },
+            "description": "Ordered PNG, JPEG or WebP Base64 data URLs. The declared MIME type must match the decoded image. The decoded limit is 30 MiB per image and 50 MiB total.",
+            "x-max-decoded-bytes-per-image": 31457280,
+            "x-max-decoded-bytes-total": 52428800
+          }
+        }
+      },
+      "ImageResult": {
+        "type": "object",
+        "required": [
+          "created",
+          "output_format",
+          "data"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix time in seconds."
+          },
+          "output_format": {
+            "enum": [
+              "png",
+              "jpeg",
+              "webp"
+            ]
+          },
+          "data": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "b64_json",
+                "width",
+                "height"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "b64_json": {
+                  "type": "string",
+                  "minLength": 1,
+                  "contentEncoding": "base64",
+                  "x-max-decoded-bytes": 31457280
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "height": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "message",
+              "type",
+              "code",
+              "param"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "invalid_request_error",
+                  "server_error"
+                ]
+              },
+              "code": {
+                "type": "string",
+                "description": "Machine-readable error code. New codes may be added."
+              },
+              "param": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

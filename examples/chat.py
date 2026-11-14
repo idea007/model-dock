@@ -14,5 +14,6 @@ stream = client.chat.completions.create(
 )
 for chunk in stream:
     if chunk.choices:
-        print(chunk.choices[0].delta.content or "", end="", flush=True)
+        delta = chunk.choices[0].delta
+        print(delta.refusal or delta.content or "", end="", flush=True)
 print()

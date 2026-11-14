@@ -16,7 +16,8 @@ for await (const data of sse(response.body)) {
   if (data === '[DONE]') { done = true; break; }
   const value = JSON.parse(data);
   if (value.error) throw new Error(value.error.message);
-  process.stdout.write(value.choices[0]?.delta.content || '');
+  const delta = value.choices[0]?.delta;
+  process.stdout.write(delta?.refusal || delta?.content || '');
 }
 if (!done) throw new Error('The stream ended before completion.');
 process.stdout.write('\n');

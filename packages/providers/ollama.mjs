@@ -43,7 +43,7 @@ export const ollama = {
     const callNames = new Map();
     const messages = request.messages.map(message => {
       for (const call of message.tool_calls || []) callNames.set(call.id, call.function.name);
-      return { role: message.role === 'developer' ? 'system' : message.role, content: message.content || '',
+      return { role: message.role === 'developer' ? 'system' : message.role, content: message.content || message.refusal || '',
         ...(message.tool_calls ? { tool_calls: message.tool_calls.map(call => ({ function: { name: call.function.name, arguments: JSON.parse(call.function.arguments) } })) } : {}),
         ...(message.role === 'tool' ? { tool_name: callNames.get(message.tool_call_id) } : {}) };
     });

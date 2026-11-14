@@ -45,6 +45,8 @@
     "demo": "node apps/demo/cli.mjs"
   },
   "devDependencies": {
+    "@readme/openapi-schemas": "4.0.0",
+    "ajv": "8.20.0",
     "jsdom": "27.4.0",
     "openai": "7.56.0"
   }

@@ -7,7 +7,7 @@ import { once } from 'node:events';
 import { DemoStore } from './store.mjs';
 import { assertLoopbackRequest } from '../../packages/protocol/loopback.mjs';
 import { buildRequest, validateSettings } from './policy.mjs';
-import { GatewayError, exact, errorPayload } from '../../packages/protocol/index.mjs';
+import { GatewayError, exact, errorPayload, normalizeRetryAfter } from '../../packages/protocol/index.mjs';
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const files = new Map([
   ['/', ['index.html', 'text/html']], ['/assets/app.mjs', ['app.mjs', 'text/javascript']], ['/assets/models.mjs', ['models.mjs', 'text/javascript']],
@@ -16,6 +16,7 @@ const files = new Map([
   ['/assets/image-options.mjs', ['../../packages/protocol/image-options.mjs', 'text/javascript']],
   ['/assets/api-docs.mjs', ['../console/api-docs.mjs', 'text/javascript']],
   ['/assets/api-docs.css', ['../console/api-docs.css', 'text/css']],
+  ['/openapi.json', ['../../docs/openapi.json', 'application/json']],
   ['/packages/ui/i18n.mjs', ['../../packages/ui/i18n.mjs', 'text/javascript']],
   ['/packages/ui/messages.mjs', ['../../packages/ui/messages.mjs', 'text/javascript']],
   ['/packages/ui/feature-labels.mjs', ['../../packages/ui/feature-labels.mjs', 'text/javascript']],
@@ -23,6 +24,7 @@ const files = new Map([
 ]);
 const json = (response, status, value) => { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)); };
 const hash = value => createHash('sha256').update(value).digest();
+const isImageModel = model => model.capabilities?.image_generation === true && model.capabilities.text === false;
 function connection(input) {
   exact(input, ['revision', 'baseUrl', 'apiKey']);
   let url; try { url = new URL(input.baseUrl); } catch { throw new GatewayError('请输入有效的 Model Dock API 地址。'); }
@@ -33,9 +35,11 @@ function connection(input) {
 }
 function normalizeCatalog(data) {
   if (!Array.isArray(data?.data)) throw new GatewayError('网关返回了无效的模型目录。', 502, 'invalid_catalog');
+  const entries = data.data.filter(row => row && typeof row === 'object' && !row.legacy_alias);
+  const imageModelIds = entries.filter(isImageModel).map(row => row.id)
+    .filter(id => typeof id === 'string' && id && id.length <= 512).slice(0, 1000);
   const seen = new Set();
-  return data.data.filter(row => row && typeof row === 'object' && !row.legacy_alias
-    && !(row.capabilities?.image_generation === true && row.capabilities.text === false)).slice(0, 1000).map(row => {
+  const models = entries.filter(row => !isImageModel(row)).slice(0, 1000).map(row => {
     if (typeof row.id !== 'string' || !row.id || row.id.length > 512 || seen.has(row.id) || typeof row.source?.id !== 'string' || !row.source.id || row.source.id.length > 100) throw new GatewayError('此网关尚未提供接入端所需的模型元数据。', 502, 'invalid_catalog');
     seen.add(row.id);
     return { id: row.id, nativeId: row.id.split('/').slice(1).join('/') || row.id, name: typeof row.name === 'string' ? row.name.slice(0, 300) : row.id, connectionId: row.source.id,
@@ -45,23 +49,26 @@ function normalizeCatalog(data) {
       reasoningEfforts: Array.isArray(row.reasoning_efforts) ? [...new Set(row.reasoning_efforts.filter(level => typeof level === 'string' && level.length <= 30))] : [],
       defaultEffort: typeof row.default_reasoning_effort === 'string' ? row.default_reasoning_effort : null, available: true };
   });
+  return { models, imageModelIds };
 }
 async function fetchCatalog(config, signal) {
   const response = await fetch(`${config.baseUrl}/models`, { headers: { authorization: `Bearer ${config.apiKey}` }, redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]) });
   if (!response.ok) throw new GatewayError(`无法读取授权目录（HTTP ${response.status}），请检查项目密钥和模型权限。`, response.status === 401 || response.status === 403 ? 401 : 502, 'catalog_unavailable');
   return normalizeCatalog(await response.json());
 }
-function mergeCatalog(state, catalog) {
-  const ids = new Set(catalog.map(row => row.id));
-  state.catalog = [...catalog, ...state.catalog.filter(row => !ids.has(row.id)).map(row => ({ ...row, available: false }))];
-  for (const model of catalog) if (!state.models.some(row => row.id === model.id)) state.models.push({ id: model.id, enabled: false, reasoningPolicy: null, groupPolicies: {} });
+function mergeCatalog(state, { models, imageModelIds }) {
+  const ids = new Set(models.map(row => row.id));
+  state.catalog = [...models, ...state.catalog.filter(row => !ids.has(row.id)).map(row => ({ ...row, available: false }))];
+  for (const model of models) if (!state.models.some(row => row.id === model.id)) state.models.push({ id: model.id, enabled: false, reasoningPolicy: null, groupPolicies: {} });
+  state.imageModelIds = imageModelIds;
   state.catalogError = ''; state.catalogUpdatedAt = new Date().toISOString();
 }
 export function demoSnapshot(state) {
   const sources = [...new Map(state.catalog.map(model => [model.source.id, model.source])).values()];
+  const imageModelIds = state.connection && !state.catalogError ? state.imageModelIds ?? [] : [];
   return { revision: state.revision, settingsRevision: state.settingsRevision || 0, version: '0.1.0', mode: 'gateway', connection: { baseUrl: state.connection?.baseUrl || 'http://127.0.0.1:4317/v1', configured: Boolean(state.connection), error: state.catalogError, refreshedAt: state.catalogUpdatedAt || null },
     connections: sources.map(source => ({ ...source, enabled: Boolean(state.connection) && !state.catalogError, status: state.catalogError ? 'error' : 'connected' })),
-    models: state.catalog.map(model => ({ ...model, ...state.models.find(row => row.id === model.id), available: model.available && !state.catalogError })), routes: state.routes };
+    models: state.catalog.map(model => ({ ...model, ...state.models.find(row => row.id === model.id), available: model.available && !state.catalogError })), imageModelIds, routes: state.routes };
 }
 export async function startDemo({ directory: dataDirectory, port = 4318 } = {}) {
   const store = await new DemoStore(dataDirectory).open();
@@ -71,7 +78,7 @@ export async function startDemo({ directory: dataDirectory, port = 4318 } = {}) 
     // Retired simulated connections must not appear as real authorized models.
     if (store.read().connection?.mock) {
       await store.mutate(store.read().revision, state => {
-        state.connection = null; state.catalog = []; state.models = []; state.catalogError = ''; state.catalogUpdatedAt = null;
+        state.connection = null; state.catalog = []; state.models = []; state.imageModelIds = []; state.catalogError = ''; state.catalogUpdatedAt = null;
         state.routes.forEach(feature => { feature.allowedModelIds = []; feature.modelId = ''; feature.reasoningOverrides = {}; });
       });
     }
@@ -124,7 +131,14 @@ export async function startDemo({ directory: dataDirectory, port = 4318 } = {}) 
           const state = store.read(); if (!state.connection) throw new GatewayError('请先连接 Model Dock。');
           const input = buildRequest(state, body);
           const upstream = await fetch(`${state.connection.baseUrl}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${state.connection.apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(input), redirect: 'error', signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]) });
-          if (!upstream.ok) { const failure = await upstream.json().catch(() => null); throw new GatewayError(failure?.error?.message || `网关请求失败（${upstream.status}）。`, upstream.status, failure?.error?.code || 'gateway_error'); }
+          const requestId = upstream.headers.get('x-request-id');
+          if (requestId) response.setHeader('x-request-id', requestId);
+          if (!upstream.ok) {
+            const failure = await upstream.json().catch(() => null);
+            const retryAfter = upstream.status === 429 && normalizeRetryAfter(upstream.headers.get('retry-after'));
+            if (retryAfter) response.setHeader('retry-after', retryAfter);
+            throw new GatewayError(failure?.error?.message || `网关请求失败（${upstream.status}）。`, upstream.status, failure?.error?.code || 'gateway_error', failure?.error?.param ?? null);
+          }
           const type = upstream.headers.get('content-type') || '';
           if (!type.includes(input.stream ? 'text/event-stream' : 'application/json')) { await upstream.body?.cancel(); throw new GatewayError('网关响应格式不正确。', 502, 'invalid_gateway_response'); }
           response.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });

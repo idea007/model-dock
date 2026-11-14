@@ -2,13 +2,15 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { once } from 'node:events';
 import { Store, newId } from '../../packages/core/store.mjs';
 import { Gateway } from '../../packages/core/gateway.mjs';
 import { assertLoopbackRequest } from '../../packages/protocol/loopback.mjs';
 import { GatewayError, VERSION, errorPayload, exact, object } from '../../packages/protocol/index.mjs';
 import { maxImageRequestBytes } from '../../packages/protocol/image-options.mjs';
 import { ConsoleSessions } from './console-sessions.mjs';
+import { completionState, finalizeCompletion, mergeDelta } from './completion.mjs';
+import { beginStream, json, write } from './http.mjs';
+import { createResponse } from './responses.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const staticFiles = new Map([
@@ -16,6 +18,7 @@ const staticFiles = new Map([
   ['/assets/app.mjs', [path.join(directory, '../console/app.mjs'), 'text/javascript; charset=utf-8']],
   ['/assets/style.css', [path.join(directory, '../console/style.css'), 'text/css; charset=utf-8']],
   ['/assets/models.css', [path.join(directory, '../console/models.css'), 'text/css; charset=utf-8']],
+  ['/openapi.json', [path.join(directory, '../../docs/openapi.json'), 'application/json; charset=utf-8']],
   ['/assets/api-docs.mjs', [path.join(directory, '../console/api-docs.mjs'), 'text/javascript; charset=utf-8']],
   ['/assets/api-docs.css', [path.join(directory, '../console/api-docs.css'), 'text/css; charset=utf-8']],
   ['/packages/ui/i18n.mjs', [path.join(directory, '../../packages/ui/i18n.mjs'), 'text/javascript; charset=utf-8']],
@@ -24,10 +27,6 @@ const staticFiles = new Map([
   ['/assets/events.mjs', [path.join(directory, '../../packages/protocol/events.mjs'), 'text/javascript; charset=utf-8']],
   ['/assets/image-options.mjs', [path.join(directory, '../../packages/protocol/image-options.mjs'), 'text/javascript; charset=utf-8']]
 ]);
-function json(response, status, value) {
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-  response.end(JSON.stringify(value));
-}
 async function readBody(request, limit = 2 * 1024 * 1024) {
   if (!String(request.headers['content-type'] || '').toLowerCase().startsWith('application/json')) throw new GatewayError('Use Content-Type: application/json.', 415, 'unsupported_media_type');
   const tooLarge = () => new GatewayError(`Request exceeds the ${limit / (1024 * 1024)} MiB limit.`, 413, 'request_too_large');
@@ -49,68 +48,32 @@ async function readBody(request, limit = 2 * 1024 * 1024) {
   catch { throw new GatewayError('Request body must be valid JSON.'); }
   return object(value);
 }
-async function write(response, data, signal) {
-  signal.throwIfAborted();
-  if (!response.write(data)) await once(response, 'drain', { signal });
-}
-function mergeDelta(state, delta) {
-  if (delta.content != null) {
-    if (typeof delta.content !== 'string') throw new GatewayError('Invalid provider text delta.', 502, 'upstream_protocol_error');
-    state.content += delta.content;
-  }
-  if (delta.refusal) state.refusal = (state.refusal || '') + delta.refusal;
-  if (delta.tool_calls) {
-    if (!Array.isArray(delta.tool_calls)) throw new GatewayError('Invalid function delta.', 502, 'upstream_protocol_error');
-    for (const call of delta.tool_calls) {
-      if (!Number.isInteger(call.index) || call.index < 0 || call.index > 127) throw new GatewayError('Invalid function index.', 502, 'upstream_protocol_error');
-      const current = state.tools.get(call.index) || { id: '', type: 'function', function: { name: '', arguments: '' } };
-      if (call.id) current.id += call.id;
-      if (call.function?.name) current.function.name += call.function.name;
-      if (call.function?.arguments) current.function.arguments += call.function.arguments;
-      state.tools.set(call.index, current);
-    }
-  }
-}
 async function chat(response, gateway, body, principal, controller, id) {
   const streaming = body?.stream === true;
-  const state = { content: '', tools: new Map(), usage: null, finishReason: null };
+  const state = completionState();
   const created = Math.floor(Date.now() / 1000);
   const chunk = (delta, finishReason = null) => ({ id, object: 'chat.completion.chunk', created, model: body.model, choices: [{ index: 0, delta, finish_reason: finishReason }] });
   const emit = value => write(response, `data: ${JSON.stringify(value)}\n\n`, controller.signal);
-  let heartbeat;
+  let heartbeat, usage;
   try {
     for await (const event of gateway.generate(body, principal, { signal: controller.signal, id })) {
       if (event.type === 'delta') mergeDelta(state, event.delta);
       if (streaming && !response.headersSent) {
-        response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+        heartbeat = beginStream(response);
         await emit(chunk({ role: 'assistant' }));
-        heartbeat = setInterval(() => { if (!response.destroyed && response.writableLength < 65536) response.write(': keep-alive\n\n'); }, 15_000);
       }
       if (event.type === 'delta' && streaming) await emit(chunk(event.delta));
-      if (event.type === 'usage') state.usage = event.usage;
+      if (event.type === 'usage') usage = event.usage;
       if (event.type === 'done') state.finishReason = event.finishReason;
     }
-    const tools = [...state.tools.entries()].sort(([a], [b]) => a - b).map(([, tool]) => tool);
-    for (const tool of tools) {
-      if (!tool.id || !body.tools?.some(item => item.function.name === tool.function.name)) throw new GatewayError('Provider requested an unknown application function.', 502, 'upstream_protocol_error');
-      try { const args = JSON.parse(tool.function.arguments); if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error(); }
-      catch { throw new GatewayError('Provider returned invalid function arguments.', 502, 'upstream_protocol_error'); }
-    }
-    if (!['stop', 'length', 'tool_calls', 'content_filter'].includes(state.finishReason) || (state.finishReason === 'tool_calls') !== Boolean(tools.length)) throw new GatewayError('Invalid provider finish reason.', 502, 'upstream_protocol_error');
-    if ((body.tool_choice === 'none' && tools.length) || (body.tool_choice === 'required' && !tools.length) || (typeof body.tool_choice === 'object' && (!tools.length || tools.some(tool => tool.function.name !== body.tool_choice.function.name))) || (body.parallel_tool_calls === false && tools.length > 1)) throw new GatewayError('Provider did not honor the requested tool selection.', 502, 'upstream_tool_choice_failed');
-    if (!tools.length && ['json_object', 'json_schema'].includes(body.response_format?.type) && state.finishReason === 'stop') {
-      try {
-        const parsed = JSON.parse(state.content);
-        if (body.response_format.type === 'json_object' && (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))) throw new Error();
-      } catch { throw new GatewayError('Provider did not return valid JSON for the requested format.', 502, 'upstream_json_invalid'); }
-    }
+    const tools = finalizeCompletion(state, body);
     if (streaming) {
       await emit(chunk({}, state.finishReason));
-      if (body.stream_options?.include_usage && state.usage) await emit({ id, object: 'chat.completion.chunk', created, model: body.model, choices: [], usage: state.usage });
+      if (body.stream_options?.include_usage && usage) await emit({ id, object: 'chat.completion.chunk', created, model: body.model, choices: [], usage });
       await write(response, 'data: [DONE]\n\n', controller.signal); response.end();
     } else json(response, 200, { id, object: 'chat.completion', created, model: body.model,
-      choices: [{ index: 0, message: { role: 'assistant', content: state.content || (tools.length ? null : ''), ...(tools.length ? { tool_calls: tools } : {}), ...(state.refusal ? { refusal: state.refusal } : {}) }, finish_reason: state.finishReason }],
-      ...(state.usage ? { usage: state.usage } : {}) });
+      choices: [{ index: 0, message: { role: 'assistant', content: state.content || (tools.length || state.refusal ? null : ''), ...(tools.length ? { tool_calls: tools } : {}), ...(state.refusal ? { refusal: state.refusal } : {}) }, finish_reason: state.finishReason }],
+      ...(usage ? { usage } : {}) });
   } catch (error) {
     gateway.recordResponseFailure(id, error);
     throw error;
@@ -163,6 +126,11 @@ export async function startGateway(options) {
       if (request.method === 'POST' && pathname === '/v1/chat/completions') {
         await chat(response, gateway, await readBody(request), principal, controller, id); return;
       }
+      if (request.method === 'POST' && pathname === '/v1/responses') {
+        const responseId = newId('resp');
+        response.setHeader('x-request-id', responseId);
+        await createResponse(response, gateway, await readBody(request), principal, { signal: controller.signal, id: responseId }); return;
+      }
       if (request.method === 'POST' && pathname === '/v1/images/generations') {
         const imageRequestId = newId('img');
         response.setHeader('x-request-id', imageRequestId);
@@ -200,7 +168,9 @@ export async function startGateway(options) {
         const payload = errorPayload(error);
         if (response.headersSent) response.end(`data: ${JSON.stringify(payload)}\n\n`);
         else {
-          if (error.status === 429) response.setHeader('retry-after', '2');
+          if (error instanceof GatewayError && error.status === 429 && error.retryAfter !== undefined) {
+            response.setHeader('retry-after', error.retryAfter);
+          }
           json(response, error instanceof GatewayError ? error.status : 500, payload);
         }
       }

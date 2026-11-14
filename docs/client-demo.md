@@ -24,7 +24,7 @@ Open `http://127.0.0.1:4318` directly or refresh it without a manual local-sessi
 
 **Connection settings** (`接入设置`) is a separate page alongside **Application experience** and **Functions & models** in the left navigation, including on mobile. Open it directly at `/?view=settings`. Failed validation shows an error without saving invalid credentials. Saved connections survive client restarts.
 
-Open **API documentation** (`接口文档`, `/?view=api`) to read the gateway's endpoint details and copy cURL examples. The reference is available before connecting and uses the configured gateway address when connected.
+Open **API documentation** (`接口文档`, `/?view=api`) to read the gateway's endpoint details, copy cURL examples and download its [OpenAPI 3.1 specification](openapi.json). After connecting, the examples use the saved gateway address and authorized model IDs, including available Codex image models. Application functions use the text-model catalog.
 
 After saving server publication, capability or reasoning changes, use **Refresh models** (`刷新模型`) in Connection settings or Functions & models without reentering the key. Settings shows the available authorized model count and last successful sync time. Reopening the page also refreshes the catalog. Unsaved application drafts survive metadata refreshes; concurrent edits to saved application preferences still produce a revision conflict.
 
@@ -52,10 +52,12 @@ These routes belong to the **client process**, not the gateway. Static assets, `
 | Method | Path | Purpose |
 | --- | --- | --- |
 | POST | `/api/session` | Automatically establish a browser session with `X-Model-Dock-Client: 1`; returns `{session}` and rejects foreign page origins |
-| GET | `/api/state` | Safe app snapshot: cached authorized metadata and preferences, no keys |
+| GET | `/api/state` | Safe app snapshot with text-model preferences and authorized `imageModelIds` for API examples |
 | POST | `/api/connection` | `{revision, baseUrl, apiKey}`: read authorized models and save a project connection |
 | POST | `/api/refresh` | `{revision}`: refresh the project catalog; preserve missing bindings as unavailable |
 | POST | `/api/settings` | `{revision, models, routes}`: save the entire app draft atomically |
 | POST | `/api/run` | `{featureId, prompt, modelId?, reasoningEffort?, stream?}`: resolve a feature, validate preferences, forward JSON/SSE |
 
-Here `routes` is an internal legacy name for the demo's application feature array; it is never sent to gateway management. Models contain `{id, enabled, reasoningPolicy, groupPolicies}`. A feature contains `{id, name, kind, group, selection, modelId, allowedModelIds, reasoningOverrides}`. `selection` is `single` or `multiple`, `modelId` is the explicit default, and reasoning overrides are keyed by authorized model ID. Source: `apps/demo/policy.mjs` and `apps/demo/features.mjs`.
+The run response includes the gateway's `x-request-id` when available. On `429` it also preserves a valid `Retry-After` from the gateway.
+
+Here `routes` is the demo's application feature array. Models contain `{id, enabled, reasoningPolicy, groupPolicies}`. A feature contains `{id, name, kind, group, selection, modelId, allowedModelIds, reasoningOverrides}`. `selection` is `single` or `multiple`, `modelId` is the explicit default, and reasoning overrides are keyed by authorized model ID. See `apps/demo/policy.mjs` and `apps/demo/features.mjs`.

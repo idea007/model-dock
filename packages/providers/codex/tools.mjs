@@ -16,7 +16,11 @@ export function prepareTools(request) {
     })) }] : [],
     readCall(params) {
       const name = names.get(params.tool);
-      if (params.namespace !== 'application' || !name || !params.callId || !params.arguments || typeof params.arguments !== 'object' || Array.isArray(params.arguments)) throw new GatewayError('Codex requested an unregistered function.', 502, 'codex_tool_invalid');
+      if (params.namespace !== 'application' || !name || typeof params.callId !== 'string' || !params.callId.trim()
+        || params.callId.length > 200 || /[\u0000-\u001f]/u.test(params.callId)
+        || !params.arguments || typeof params.arguments !== 'object' || Array.isArray(params.arguments)) {
+        throw new GatewayError('Codex returned an invalid application function call.', 502, 'codex_tool_invalid');
+      }
       return { id: params.callId, type: 'function', function: { name, arguments: JSON.stringify(params.arguments) } };
     }
   };
@@ -24,7 +28,7 @@ export function prepareTools(request) {
 export function prepareConversation(messages) {
   const history = [], instructions = []; let input = [];
   for (const [index, message] of messages.entries()) {
-    const text = message.content || '';
+    const text = message.content || message.refusal || '';
     if (['system', 'developer'].includes(message.role)) { instructions.push(text); continue; }
     if (message.role === 'user' && index === messages.length - 1) { input = [{ type: 'text', text }]; continue; }
     if (message.role === 'tool') { history.push({ type: 'function_call_output', call_id: message.tool_call_id, output: text }); continue; }

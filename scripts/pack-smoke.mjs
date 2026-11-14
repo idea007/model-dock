@@ -27,6 +27,7 @@ try {
     if (!response.ok) throw new Error(`Installed artifact missing ${endpoint}`);
     await response.arrayBuffer();
   }
+  const specification = await fs.readFile(path.join(installed, 'docs/openapi.json'), 'utf8');
   const demoHelp = await run(process.execPath, [path.join(installed, 'apps/demo/cli.mjs'), '--help'], { cwd: temporary });
   if (!demoHelp.stdout.includes('client app') || demoHelp.stdout.includes('--mock')) throw new Error('Installed demo CLI failed.');
   const { startDemo } = await import(pathToFileURL(path.join(installed, 'apps/demo/server.mjs')));
@@ -35,6 +36,12 @@ try {
     const response = await fetch(demo.origin + endpoint);
     if (!response.ok) throw new Error(`Installed demo artifact missing ${endpoint}`);
     await response.arrayBuffer();
+  }
+  for (const { origin } of [app, demo]) {
+    const response = await fetch(origin + '/openapi.json');
+    if (!response.ok || !response.headers.get('content-type')?.includes('application/json') || await response.text() !== specification) {
+      throw new Error('Installed app failed to serve the packaged OpenAPI specification.');
+    }
   }
   const sessionResponse = await fetch(demo.origin + '/api/session', { method: 'POST', headers: { 'x-model-dock-client': '1' } });
   const { session } = await sessionResponse.json();
@@ -56,5 +63,13 @@ try {
   await api('/api/settings', { revision: state.revision, models, routes });
   const result = await api('/api/run', { featureId: 'chat', prompt: 'Package smoke test', stream: false });
   if (result.choices[0].message.content !== 'Package smoke response') throw new Error('Installed client-to-gateway call failed.');
+  const responses = await fetch(`${app.origin}/v1/responses`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'smoke/chat', input: 'Package smoke test' })
+  });
+  const completion = await responses.json();
+  if (!responses.ok || completion.store !== false || completion.output?.[0]?.content[0]?.text !== 'Package smoke response') {
+    throw new Error('Installed Responses endpoint failed.');
+  }
   console.log(`Package verified: ${manifest.filename}, ${manifest.files.length} files, ${manifest.size} bytes. Installed CLIs, HTTP assets, direct client entry, project-key connection and isolated test inference work outside the source tree.`);
 } finally { await demo?.close(); await app?.close(); await fs.rm(temporary, { recursive: true, force: true }); }

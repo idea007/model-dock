@@ -89,7 +89,7 @@ Existing server aliases remain compatible with existing keys and calls. New appl
 
 ## Connect your app
 
-Open **API documentation** (`接口文档`) in either sidebar. Expand an endpoint to see its parameters, response and cURL example. The client page uses the gateway address saved in **Connection settings**. Expand `GET /v1/models` to copy the catalog request and get an authorized model's full `data[].id`. [API reference](docs/api.md)
+Open **API documentation** (`接口文档`) in either sidebar for parameters, response examples and cURL. The client page uses the saved gateway address and authorized model IDs. Run `GET /v1/models` with your project key to get a model's full `data[].id`. To import the API into a client tool, download [OpenAPI 3.1](docs/openapi.json) from the repository or open `/openapi.json` on either local app. [API reference](docs/api.md)
 
 ![Client API documentation with GET /v1/models expanded and a Copy cURL button](docs/screenshots/client-api-docs.webp)
 
@@ -111,12 +111,14 @@ import OpenAI from 'openai';
 const client = new OpenAI({
   baseURL: process.env.MODEL_DOCK_BASE_URL || 'http://127.0.0.1:4317/v1',
   apiKey: process.env.MODEL_DOCK_API_KEY,
+  maxRetries: 0,
 });
 const result = await client.chat.completions.create({
   model: process.env.MODEL_DOCK_MODEL,
   messages: [{ role: 'user', content: 'Hello' }],
 });
-console.log(result.choices[0].message.content);
+const { content, refusal } = result.choices[0].message;
+console.log(refusal ?? content);
 ```
 
 See the [plain JavaScript example](examples/chat.mjs), [Python SDK example](examples/chat.py), and [application tool-calling example](examples/tools.mjs). Keep project keys in your application's server-side environment variables, not in public browser scripts.
@@ -133,7 +135,7 @@ Install and start Ollama separately, then download a model with a command such a
 
 Codex uses native JSON-RPC and creates a temporary thread for each request. Shell, browser, plugin, and host MCP capabilities are isolated. Application tool calls are returned to the caller for execution; the gateway does not execute them on the app's behalf. This is a real model bridge using the account or upstream configured in Codex and its associated quota. `model/list` is only a catalog and does not establish that the current account can run a particular model.
 
-Discover models on the Codex connection and publish `codex-imagegen` under **模型与服务 → 图片生成**. In **调用测试**, add up to five reference images, choose an aspect ratio, request a transparent background, or reuse a result with **继续编辑**. Projects can grant their key access to this model and call `POST /v1/images/generations`. Requests use the signed-in Codex account's quota. [Images endpoint](docs/api.md#inference)
+Discover models on the Codex connection and publish `codex-imagegen` under **Models & services → Image generation**. In the playground, add up to five reference images, request an aspect ratio or a transparent background, or use **Continue editing**. Grant your project key access to the image model. Use the OpenAI SDK's `images.generate()` for basic generation and the Model Dock JSON extension `reference_images` on `POST /v1/images/generations` for edits. Requests use the signed-in Codex account's quota. [Image API and runnable edit example](docs/api.md#images)
 
 Codex inherits `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` from the environment that starts the gateway. When no proxy is explicitly configured, macOS detects enabled system HTTP/HTTPS proxies on loopback and passes them only to the Codex child process, without changing system settings. PAC and non-loopback proxies are not imported automatically; set the environment variables explicitly on other platforms or for custom networks. If model listing works but inference keeps reconnecting, check the CLI's proxy connection first.
 
@@ -142,13 +144,14 @@ Built-in Codex authentication has a different scope from hosted services. For co
 ## Compatibility
 
 - `GET /v1/models`
-- `POST /v1/chat/completions`: text messages, non-streaming JSON, SSE, tool calls, and tool-result round trips.
-- `POST /v1/images/generations` returns one Base64-encoded image from Codex.
+- `POST /v1/chat/completions` accepts strings or arrays of text parts, with one choice per request. It supports JSON, SSE, explicit refusals, and function calls with tool-result round trips.
+- `POST /v1/responses` supports stateless text and SSE on all three adapters, plus a single function handoff on OpenAI-compatible APIs and Codex. Use `sdk.responses.create()` and carry forward history in `input`. The gateway defaults to `store: false`. [Responses examples](docs/api.md#responses)
+- `POST /v1/images/generations`: one Base64-encoded image from Codex, with optional reference images.
 - Token usage as reported by the upstream. Missing usage stays unknown rather than being fabricated as zero.
 - Client disconnects and cancellation, request timeouts, concurrency limits, and project-key revocation.
 - Management APIs for connections, catalogs, model publication, project keys, and cancellation of in-flight requests.
 
-**Compatibility is limited to an explicit subset.** Unsupported parameters return errors. Codex cannot guarantee the semantics of options such as `temperature` or `max_tokens`, so it does not silently accept and ignore them. See the [compatibility matrix](docs/compatibility.md) and [management API documentation](docs/api.md).
+**Compatibility covers the documented subset.** Unsupported parameters return errors. For example, Codex rejects `temperature` and `max_tokens`. On a `429`, inspect `error.code` to distinguish gateway capacity from provider rate limits. See the [compatibility matrix](docs/compatibility.md), [errors and retries](docs/api.md#errors-and-retries) and [management API](docs/api.md#management).
 
 Later work includes audio and video capabilities, remote device pairing, and Ollama model management. [Roadmap](docs/roadmap.md)
 

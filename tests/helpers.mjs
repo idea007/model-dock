@@ -24,11 +24,34 @@ export async function fixtureUpstream(t, models = [{ id: 'shared' }, { id: 'slow
     }
     if (request.url !== '/v1/chat/completions') { response.writeHead(404); response.end(); return; }
     if (request.headers.authorization !== 'Bearer fixture-upstream') { response.writeHead(401); response.end('private secret should never be reflected'); return; }
+    const prompt = value.messages.at(-1).content;
+    const rateLimit = { 'rate-limit-seconds': '90', 'rate-limit-date': 'Thu, 01 Jan 2099 00:00:00 GMT',
+      'rate-limit-invalid': '1.5', 'rate-limit-missing': null };
+    if (Object.hasOwn(rateLimit, prompt)) {
+      const delay = rateLimit[prompt];
+      response.writeHead(429, { 'content-type': 'application/json', ...(delay ? { 'retry-after': delay } : {}) });
+      response.end(JSON.stringify({ error: { message: 'private provider error body' } }));
+      return;
+    }
+    const refuse = prompt === 'refuse-structured' || prompt === 'refuse-invalid';
+    const refusal = prompt === 'refuse-invalid' ? { invalid: true } : 'Fixture refusal.';
     const tool = value.tools?.length && value.messages.at(-1).role !== 'tool';
-    const content = value.messages.at(-1).role === 'tool' ? `工具结果：${value.messages.at(-1).content}` : '你好，来自测试上游。';
-    const toolCalls = [{ id: 'call_1', type: 'function', function: { name: value.tools?.[0]?.function?.name || 'weather', arguments: '{"city":"杭州"}' } }];
+    let content = '你好，来自测试上游。';
+    if (value.messages.at(-1).role === 'tool') content = `工具结果：${prompt}`;
+    if (prompt === 'Return a JSON object with a greeting.') content = '{"greeting":"Hello!"}';
+    const toolName = value.tool_choice?.function?.name || value.tools?.[0]?.function?.name || 'weather';
+    const toolCalls = [{ id: 'call_1', type: 'function', function: {
+      name: prompt === 'invalid-tool-name' ? 'unregistered' : toolName,
+      arguments: ['invalid-tool-arguments', 'length-limit'].includes(prompt) ? '{"city":' : '{"city":"杭州"}'
+    } }];
+    if (prompt === 'multiple-tool-calls') toolCalls.push({ ...toolCalls[0], id: 'call_2' });
+    const finishReason = prompt === 'length-limit' ? 'length' : prompt === 'content-filter' ? 'content_filter' : tool && !refuse ? 'tool_calls' : 'stop';
     const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
-    if (!value.stream) return send({ choices: [{ index: 0, message: { role: 'assistant', content: tool ? null : content, ...(tool ? { tool_calls: toolCalls } : {}) }, finish_reason: tool ? 'tool_calls' : 'stop' }], usage });
+    if (!value.stream) {
+      const message = { role: 'assistant', content: refuse || tool ? null : content,
+        ...(refuse ? { refusal } : tool ? { tool_calls: toolCalls } : {}) };
+      return send({ choices: [{ index: 0, message, finish_reason: finishReason }], usage });
+    }
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     const event = delta => `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: null }] })}\r\n\r\n`;
     if (value.model === 'slow') {
@@ -38,9 +61,15 @@ export async function fixtureUpstream(t, models = [{ id: 'shared' }, { id: 'slow
     }
     if (value.model === 'broken') { response.end(event({ content: '未完成' })); return; }
     let text;
-    if (tool) text = event({ tool_calls: [{ index: 0, ...toolCalls[0], function: { name: toolCalls[0].function.name, arguments: '{"city":' } }] }) + event({ tool_calls: [{ index: 0, function: { arguments: '"杭州"}' } }] });
+    if (refuse) text = typeof refusal === 'string' ? event({ refusal: 'Fixture ' }) + event({ refusal: 'refusal.' }) : event({ refusal });
+    else if (tool) text = toolCalls.map((call, index) => {
+      const { arguments: args, name } = call.function;
+      return event({ tool_calls: [{ index, ...call, function: { name, arguments: args.slice(0, 8) } }] })
+        + event({ tool_calls: [{ index, function: { arguments: args.slice(8) } }] });
+    }).join('');
+    else if (value.response_format) text = event({ content });
     else text = event({ role: 'assistant', content: '你好，' }) + event({ content: '来自测试上游。' });
-    text += `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: tool ? 'tool_calls' : 'stop' }] })}\r\n\r\n`;
+    text += `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: finishReason }] })}\r\n\r\n`;
     text += `data: ${JSON.stringify({ choices: [], usage })}\r\n\r\ndata: [DONE]\r\n\r\n`;
     const bytes = Buffer.from(text);
     for (let i = 0; i < bytes.length && !response.destroyed; i += 17) { response.write(bytes.subarray(i, i + 17)); await delay(1); }

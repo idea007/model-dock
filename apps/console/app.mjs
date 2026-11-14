@@ -1,5 +1,5 @@
 import { sse } from './events.mjs';
-import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes } from './image-options.mjs';
+import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes } from './image-options.mjs';
 import { apiDocsPage } from './api-docs.mjs';
 import { LocalizedError, dateTime, duration, errorText, initLanguage, language, languagePicker, languageSeparator, number, requestMetadata, selectLanguage, t } from '../../packages/ui/i18n.mjs';
 
@@ -52,7 +52,7 @@ function providerType(id) {
 }
 const views = { connections: ['console.connections', 'plug'], models: ['console.models', 'models'], api: ['common.apiDocs', 'docs'], playground: ['console.playground', 'play'], keys: ['console.projectAccess', 'key'] };
 const expandedApiEndpoints = new Set();
-const apiImageOptions = { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes };
+const apiImageOptions = { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes };
 const settingsKey = 'model-dock-publication-draft';
 const storedSessionKey = 'model-dock-console-session';
 const manualTokenKey = 'model-dock-token';
@@ -984,12 +984,14 @@ async function generate(form) {
       for await (const data of sse(response.body)) {
         if (data === '[DONE]') { ended = true; break; }
         const chunk = JSON.parse(data); if (chunk.error) throw chunk.error;
-        content += chunk.choices?.[0]?.delta?.content || ''; output.textContent = content; output.scrollTop = output.scrollHeight;
+        const delta = chunk.choices?.[0]?.delta;
+        content += delta?.refusal || delta?.content || ''; output.textContent = content; output.scrollTop = output.scrollHeight;
         if (chunk.usage) measurement = chunk.usage;
       }
       if (!ended) throw new LocalizedError('common.streamIncomplete');
     } else {
-      const data = await response.json(); content = data.choices?.[0]?.message?.content || ''; output.textContent = content; measurement = data.usage;
+      const data = await response.json(), message = data.choices?.[0]?.message;
+      content = message?.refusal || message?.content || ''; output.textContent = content; measurement = data.usage;
     }
   } catch (error) {
     status = controller.signal.aborted ? 'common.stopped' : 'common.failed';

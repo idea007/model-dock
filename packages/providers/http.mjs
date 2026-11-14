@@ -1,12 +1,17 @@
-import { GatewayError } from '../protocol/index.mjs';
+import { GatewayError, normalizeRetryAfter } from '../protocol/index.mjs';
 
 export async function fetchUpstream(url, options = {}) {
   try {
     const response = await fetch(url, { ...options, redirect: 'error' });
     if (!response.ok) {
       await response.body?.cancel();
-      const status = response.status === 429 ? 429 : response.status === 401 || response.status === 403 ? 502 : response.status >= 500 ? 502 : 400;
-      throw new GatewayError(`Upstream rejected the request (HTTP ${response.status}).`, status, response.status === 429 ? 'upstream_rate_limited' : response.status === 401 || response.status === 403 ? 'upstream_auth_failed' : 'upstream_rejected');
+      if (response.status === 429) {
+        throw new GatewayError('Upstream rejected the request (HTTP 429).', 429, 'upstream_rate_limited', null,
+          { retryAfter: normalizeRetryAfter(response.headers.get('retry-after')) });
+      }
+      const authFailed = response.status === 401 || response.status === 403;
+      throw new GatewayError(`Upstream rejected the request (HTTP ${response.status}).`, authFailed || response.status >= 500 ? 502 : 400,
+        authFailed ? 'upstream_auth_failed' : 'upstream_rejected');
     }
     return response;
   } catch (error) {

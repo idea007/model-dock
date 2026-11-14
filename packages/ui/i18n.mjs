@@ -89,6 +89,8 @@ const translatedErrorCodes = new Map([
   ['codex_connection_failed', 'console.codexConnectionFailed'],
   ['codex_rate_limited', 'console.codexQuotaExhausted'],
   ['codex_failed', 'errors.codexFailed'],
+  ['context_length_exceeded', 'errors.codexContextLength'],
+  ['codex_bad_request', 'errors.codexBadRequest'],
   ['codex_image_unavailable', 'errors.imageUnavailable'],
   ['reasoning_effort_disabled', 'errors.reasoningLevelDisabled']
 ]);

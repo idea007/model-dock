@@ -65,17 +65,26 @@ export function createCodexProvider(options = {}) {
       if (request.parallel_tool_calls === true) throw new GatewayError('Codex bridge currently hands off one function per request.', 400, 'unsupported_parameter', 'parallel_tool_calls');
       if (request.tools?.some(tool => tool.function.strict === true)) throw new GatewayError('Codex dynamic functions cannot guarantee strict schemas.', 400, 'unsupported_parameter', 'tools.function.strict');
       if (request.reasoning_effort && !model.reasoningEfforts?.includes(request.reasoning_effort)) throw new GatewayError('This reasoning effort was not declared by the model.', 400, 'unsupported_parameter', 'reasoning_effort');
+      const controller = new AbortController();
+      const turnSignal = AbortSignal.any([signal, controller.signal]);
       const queue = []; let wake, finished = false, result, failure;
-      const task = client.run(request, { signal, onDelta(content) { queue.push({ type: 'delta', delta: { content } }); wake?.(); } })
+      const task = client.run(request, { signal: turnSignal, onDelta(content) { queue.push({ type: 'delta', delta: { content } }); wake?.(); } })
         .then(value => { result = value; }, error => { failure = error; }).finally(() => { finished = true; wake?.(); });
-      while (!finished || queue.length) {
-        if (!queue.length) await new Promise(resolve => { wake = resolve; });
-        while (queue.length) yield queue.shift();
+      try {
+        while (!finished || queue.length) {
+          if (!queue.length) await new Promise(resolve => { wake = resolve; });
+          while (queue.length) yield queue.shift();
+        }
+        if (failure) throw failure;
+        if (result.toolCalls?.length) yield { type: 'delta', delta: { tool_calls: result.toolCalls.map((call, index) => ({ index, ...call })) } };
+        if (result.usage) yield { type: 'usage', usage: result.usage };
+        yield { type: 'done', finishReason: result.finishReason };
+      } finally {
+        if (!finished) {
+          controller.abort();
+          await task;
+        }
       }
-      await task; if (failure) throw failure;
-      if (result.toolCalls?.length) yield { type: 'delta', delta: { tool_calls: result.toolCalls.map((call, index) => ({ index, ...call })) } };
-      if (result.usage) yield { type: 'usage', usage: result.usage };
-      yield { type: 'done', finishReason: result.finishReason };
     },
     close: () => Promise.allSettled([client.stop(), imageClient.stop()])
   };

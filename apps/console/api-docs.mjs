@@ -15,6 +15,23 @@ function curl(url, body, { auth = true, stream = false } = {}) {
   ].join(' \\\n');
 }
 
+function referenceCurl(url, model, prompt) {
+  const encode = [
+    'const fs = require("node:fs")',
+    'const [file, model, prompt] = process.argv.slice(1)',
+    'const reference = "data:image/png;base64," + fs.readFileSync(file).toString("base64")',
+    'process.stdout.write(JSON.stringify({ model, prompt, reference_images: [reference] }))'
+  ].join('\n');
+  return [
+    'IMAGE_PATH=reference.png',
+    `node -e ${quote(encode)} "$IMAGE_PATH" ${quote(model)} ${quote(prompt)} |`,
+    `  curl ${quote(url)} \\`,
+    '    -H "Authorization: Bearer $MODEL_DOCK_API_KEY" \\',
+    '    -H "Content-Type: application/json" \\',
+    '    --data-binary @-'
+  ].join('\n');
+}
+
 function table(headers, rows) {
   return `<div class="api-table-scroll" tabindex="0"><table><thead><tr>${headers.map(header => `<th scope="col">${escape(header)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
@@ -30,26 +47,27 @@ function endpoint(id, method, path, title, description, content, expanded, auth 
   </details>`;
 }
 
-function modelHint(model, kind, client) {
-  if (model) {
+function modelHint(id, kind, client) {
+  if (id) {
     const scope = client ? t('docs.authorizedScope') : t('docs.publishedScope');
     const access = client ? '' : t('docs.verifyModelAccess');
-    return `<p class="api-note">${t('docs.modelInExample', scope, kind, code(model.id), access)}</p>`;
+    return `<p class="api-note">${t('docs.modelInExample', scope, kind, code(id), access)}</p>`;
   }
   const modelsEndpoint = code('GET /v1/models');
   if (client) return `<p class="api-note">${t('docs.chooseAuthorizedModel', modelsEndpoint, kind, code('model'))}</p>`;
   return `<p class="api-note">${t('docs.publishModelForExample', kind, modelsEndpoint)}</p>`;
 }
 
-export function apiDocsPage({ baseUrl: gatewayUrl, models, version, expanded = new Set(), client = false }, imageOptions) {
+export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version, expanded = new Set(), client = false }, imageOptions) {
   const baseUrl = gatewayUrl.replace(/\/+$/, '');
   const origin = new URL(baseUrl).origin;
   const textModel = models.find(model => model.capability !== 'image_generation' && model.capabilities?.text !== false);
-  const imageModel = models.find(model => model.capability === 'image_generation');
+  const publishedImageId = imageModelId || models.find(model => model.capability === 'image_generation')?.id;
   const textId = textModel?.id || 'connection-id/model-id';
-  const imageId = imageModel?.id || 'connection-id/codex-imagegen';
-  const { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes } = imageOptions;
+  const imageId = publishedImageId || 'connection-id/codex-imagegen';
+  const { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes } = imageOptions;
   const chatBody = { model: textId, messages: [{ role: 'user', content: t('docs.greetingPrompt') }] };
+  const responsesBody = { model: textId, input: t('docs.greetingPrompt'), store: false };
 
   const catalog = endpoint('models', 'GET', '/v1/models', t('docs.listModels'), t('docs.listModelsSummary'), `
     <p>${t('docs.listModelsHelp')}</p>
@@ -74,6 +92,7 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, version, expanded = n
     ${table([t('docs.parameter'), t('docs.parameterType'), t('docs.description')], [
       [code('model'), t('docs.requiredString'), t('docs.chatModelField')],
       [code('messages'), t('docs.requiredArray'), t('docs.messagesField')],
+      [code('n'), t('docs.optionalInteger'), t('docs.choiceCountField')],
       [code('stream'), t('docs.optionalBoolean'), t('docs.streamField')],
       [code('stream_options'), t('docs.optionalObject'), t('docs.streamOptionsField')],
       [code('reasoning_effort'), t('docs.optionalString'), t('docs.reasoningField')],
@@ -85,10 +104,11 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, version, expanded = n
       [code('temperature / top_p'), t('docs.optionalNumber'), t('docs.samplingField')],
       [code('stop / seed / user'), t('docs.optional'), t('docs.stopSeedUserFields')]
     ])}
-    ${modelHint(textModel, t('docs.textKind'), client)}
+    ${modelHint(textModel?.id, t('docs.textKind'), client)}
     ${block('chat-request', t('docs.chatCurl'), curl(`${baseUrl}/chat/completions`, chatBody), t('docs.copyCurl'))}
     ${block('chat-response', t('docs.successResponse'), json({ id: 'chatcmpl-example', object: 'chat.completion', created: 0, model: textId, choices: [{ index: 0, message: { role: 'assistant', content: t('docs.chatResponse') }, finish_reason: 'stop' }] }))}
     <p class="api-note">${t('docs.chatResponseHelp')}</p>
+    <p class="api-note">${t('docs.structuredOutputHelp')}</p>
     <h3>${t('docs.streaming')}</h3>
     ${block('chat-stream', t('docs.streamingCurl'), curl(`${baseUrl}/chat/completions`, { ...chatBody, stream: true, stream_options: { include_usage: true } }, { stream: true }), t('docs.copyCurl'))}
     <p>${t('docs.streamingHelp', code('text/event-stream'), code('data: [DONE]'))}</p>
@@ -104,6 +124,33 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, version, expanded = n
     <p class="api-note">${t('docs.toolRoundTrip')}</p>
   `, expanded);
 
+  const responses = endpoint('responses', 'POST', '/v1/responses', t('docs.responses'), t('docs.responsesSummary'), `
+    <p>${t('docs.responsesHelp')}</p>
+    <h3>${t('docs.requestParameters')}</h3>
+    ${table([t('docs.parameter'), t('docs.parameterType'), t('docs.description')], [
+      [code('model'), t('docs.requiredString'), t('docs.chatModelField')],
+      [code('input'), t('docs.requiredStringArray'), t('docs.responsesInput')],
+      [code('instructions'), t('docs.optionalString'), t('docs.responsesInstructions')],
+      [code('stream'), t('docs.optionalBoolean'), t('docs.streamField')],
+      [code('store'), t('docs.optionalBoolean'), t('docs.responsesStore')],
+      [code('tools / tool_choice'), t('docs.optional'), t('docs.responsesTools')],
+      [code('parallel_tool_calls'), t('docs.optionalBoolean'), t('docs.responsesParallel')]
+    ])}
+    ${modelHint(textModel?.id, t('docs.textKind'), client)}
+    ${block('responses-request', t('docs.responsesCurl'), curl(`${baseUrl}/responses`, responsesBody), t('docs.copyCurl'))}
+    ${block('responses-response', t('docs.successResponse'), json({
+      id: 'resp_example', object: 'response', model: textId, created_at: 0, status: 'completed',
+      output: [{ id: 'msg_example', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: t('docs.chatResponse'), annotations: [], logprobs: [] }] }],
+      error: null, incomplete_details: null, usage: null, instructions: null, tools: [], tool_choice: 'auto',
+      parallel_tool_calls: false, store: false, text: { format: { type: 'text' } }, temperature: null, top_p: null, metadata: null, access_programs: null
+    }))}
+    <p>${t('docs.responsesOutput')}</p>
+    <h3>${t('docs.streaming')}</h3>
+    ${block('responses-stream', t('docs.responsesStreamCurl'), curl(`${baseUrl}/responses`, { ...responsesBody, stream: true }, { stream: true }), t('docs.copyCurl'))}
+    <p>${t('docs.responsesStream')}</p>
+    <p class="api-note">${t('docs.responsesReplay')}</p>
+  `, expanded);
+
   const images = endpoint('images', 'POST', '/v1/images/generations', t('docs.images'), t('docs.imagesSummary'), `
     <p>${t('docs.imagesHelp')}</p>
     <h3>${t('docs.requestParameters')}</h3>
@@ -115,13 +162,13 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, version, expanded = n
       [code('background'), t('docs.optionalString'), t('docs.backgroundField', code('auto'), code('transparent'))],
       [code('n / response_format'), t('docs.optional'), t('docs.imageOutputFields', mib(maxImageRequestBytes))]
     ])}
-    ${modelHint(imageModel, t('docs.imageKind'), client)}
+    ${modelHint(publishedImageId, t('docs.imageKind'), client)}
     ${block('images-request', t('docs.imagesCurl'), curl(`${baseUrl}/images/generations`, { model: imageId, prompt: t('docs.imagePrompt'), aspect_ratio: '1:1', n: 1, response_format: 'b64_json' }), t('docs.copyCurl'))}
     ${block('images-response', t('docs.successResponse'), json({ created: 0, output_format: 'png', data: [{ b64_json: t('docs.imageData'), width: 1024, height: 1024 }] }))}
-    <p>${t('docs.imageResponseHelp')}</p>
+    <p>${t('docs.imageResponseHelp', mib(maxImageResultBytes))}</p>
     <h3>${t('docs.editReferences')}</h3>
     <p>${t('docs.referenceEditHelp')}</p>
-    ${block('images-edit', t('docs.editBody'), json({ model: imageId, prompt: t('docs.editPrompt'), reference_images: [t('docs.referencePlaceholder')], background: 'transparent' }))}
+    ${block('images-edit', t('docs.editCurl'), referenceCurl(`${baseUrl}/images/generations`, imageId, t('docs.editPrompt')), t('docs.copyCurl'))}
     <p class="api-note">${t('docs.continueImageHelp', code('data:image/${output_format};base64,${data[0].b64_json}'))}</p>
   `, expanded);
 
@@ -139,19 +186,23 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, version, expanded = n
       <div class="between wrap"><div><h2 id="api-connection-title">${t('docs.connectionAndAuth')}</h2><p>${t('docs.compatibleBaseUrl')}</p><code class="api-base-url">${escape(baseUrl)}</code></div><button data-action="copy-endpoint">${t('docs.copyAddress', copyIcon)}</button></div>
       <div class="api-authorization"><div><span>${t('docs.requestHeader')}</span><code>Authorization: Bearer $MODEL_DOCK_API_KEY</code></div><button class="small-button" data-view="${keyView}">${keyLink} →</button></div>
       <p class="api-note">${t('docs.authHelp')}</p>
+      <p class="api-note"><a href="/openapi.json" download="model-dock.openapi.json">${t('docs.openapiDownload')}</a></p>
     </section>
-    <div class="section-header between wrap"><h2 id="api-list-title">${t('docs.endpoints')} <span class="api-count">4</span></h2><span class="muted">${t('docs.expandHelp')}</span></div>
-    <section class="api-endpoints" aria-labelledby="api-list-title">${catalog}${chat}${images}${health}</section>
+    <div class="section-header between wrap"><h2 id="api-list-title">${t('docs.endpoints')} <span class="api-count">5</span></h2><span class="muted">${t('docs.expandHelp')}</span></div>
+    <section class="api-endpoints" aria-labelledby="api-list-title">${catalog}${chat}${responses}${images}${health}</section>
     <section class="card api-errors" aria-labelledby="api-errors-title"><h2 id="api-errors-title">${t('docs.errorHandling')}</h2><p>${t('docs.errorHelp')}</p>
       ${block('error', t('docs.errorExample'), json({ error: { message: 'This key cannot use the selected model.', type: 'invalid_request_error', code: 'model_forbidden', param: null } }))}
       ${table([t('docs.httpStatus'), t('docs.errorCodes'), t('docs.errorResolution')], [
-        ['400', code('invalid_request / unsupported_parameter'), t('docs.badRequestHelp')],
+        ['400', code('invalid_request / unsupported_parameter / codex_bad_request'), t('docs.badRequestHelp')],
+        ['400', code('context_length_exceeded'), t('errors.codexContextLength')],
         ['401', code('unauthorized / key_revoked'), t('docs.unauthorizedHelp')],
         ['403', code('model_forbidden'), t('docs.forbiddenHelp')],
         ['404', code('model_unavailable'), t('docs.modelUnavailableHelp')],
         ['413', code('request_too_large / image_reference_too_large'), t('docs.tooLargeHelp')],
+        ['415', code('unsupported_media_type'), code('Content-Type: application/json')],
         ['429', code('connection_busy'), t('docs.busyHelp')],
-        ['502', code('upstream_auth_failed / upstream_protocol_error'), t('docs.upstreamErrorHelp')],
+        ['429', code('upstream_rate_limited / codex_rate_limited'), t('docs.rateLimitedHelp')],
+        ['502', code('upstream_auth_failed / upstream_protocol_error / upstream_json_invalid / codex_protocol_error'), t('docs.upstreamErrorHelp')],
         ['504', code('request_timeout'), t('docs.timeoutHelp')]
       ])}
       <p class="api-note">${t('docs.retryHelp')}</p>

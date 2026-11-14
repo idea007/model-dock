@@ -89,7 +89,7 @@ npm run demo -- --open
 
 ## 接入自己的项目
 
-服务端和接入端左侧都有「接口文档」。展开接口可以查看参数、响应和 cURL 示例。接入端的示例使用「接入设置」中保存的网关地址。展开 `GET /v1/models` 可复制目录查询命令，从返回的 `data[].id` 取得授权模型的完整 ID。[API 文档](docs/api.md)
+服务端和接入端左侧都有「接口文档」。展开接口可查看参数、响应和 cURL 示例。接入端示例使用已保存的网关地址和项目授权的模型 ID。也可用项目密钥请求 `GET /v1/models`，从 `data[].id` 取得完整 ID。两端本地服务的 `/openapi.json` 都可下载 [OpenAPI 3.1 规范](docs/openapi.json)，用于导入 API 工具。[API 文档](docs/api.md)
 
 ![接入端接口文档展开 GET /v1/models，显示接口说明和复制 cURL 按钮](docs/screenshots/client-api-docs.webp)
 
@@ -111,12 +111,14 @@ import OpenAI from 'openai';
 const client = new OpenAI({
   baseURL: process.env.MODEL_DOCK_BASE_URL || 'http://127.0.0.1:4317/v1',
   apiKey: process.env.MODEL_DOCK_API_KEY,
+  maxRetries: 0,
 });
 const result = await client.chat.completions.create({
   model: process.env.MODEL_DOCK_MODEL,
   messages: [{ role: 'user', content: '你好' }],
 });
-console.log(result.choices[0].message.content);
+const { content, refusal } = result.choices[0].message;
+console.log(refusal ?? content);
 ```
 
 [原生 JavaScript 示例](examples/chat.mjs)、[Python SDK 示例](examples/chat.py)、[应用工具调用示例](examples/tools.mjs)。示例密钥应放在应用服务端环境变量中，不放在公开网页脚本中。
@@ -133,7 +135,7 @@ Ollama 需另行安装、启动并下载模型，例如 `ollama pull <model>`。
 
 Codex 使用原生 JSON-RPC，按请求创建临时线程；Shell、浏览器、插件、宿主 MCP 等能力被隔离。应用工具调用会返回调用方执行，网关不会替应用执行工具。它是真实模型桥接，使用 Codex 配置的账号/上游及对应额度；`model/list` 只是目录，不能证明当前账号有某个模型的推理权限。
 
-在 Codex 连接点击「发现模型」，然后在「模型与服务 → 图片生成」发布 `codex-imagegen`。在「调用测试」可以添加最多 5 张参考图、选择期望画幅、请求透明背景，或将生成结果用于「继续编辑」。也可以为项目密钥授权后，通过 `POST /v1/images/generations` 调用。生成使用本机 Codex 账号的额度。[请求与返回格式](docs/api.md#inference)
+在 Codex 连接点击「发现模型」，然后在「模型与服务 → 图片生成」发布 `codex-imagegen`。在「调用测试」可添加最多 5 张参考图、指定预期画幅、请求透明背景，或用生成结果「继续编辑」。为项目密钥授权后，基础生成可调用 OpenAI SDK 的 `images.generate()`。参考图编辑使用 Model Dock 扩展，向 `POST /v1/images/generations` 发送包含 `reference_images` 的 JSON。生成使用本机 Codex 账号的额度。[图片接口与编辑示例](docs/api.md#images)
 
 Codex 会继承启动网关时的 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`。未显式设置代理时，macOS 会读取系统已启用的本机 HTTP/HTTPS 代理，仅传给 Codex 子进程，不修改系统配置。PAC 和非本机代理不会自动导入；其他平台或特殊网络请显式设置环境变量。模型列表正常但推理长时间重连时，先检查 CLI 的代理连接。
 
@@ -142,13 +144,14 @@ Codex 内置认证的适用范围与托管服务不同。商业/托管场景需�
 ## 兼容范围
 
 - `GET /v1/models`
-- `POST /v1/chat/completions`：文本消息、非流式 JSON、SSE、工具调用与结果回传。
+- `POST /v1/chat/completions` 接受字符串或文本内容项数组，每次只返回一个 choice。支持 JSON、SSE、显式拒答，以及工具调用和结果回传。
+- `POST /v1/responses` 支持模型 API、Ollama 和 Codex 的无状态文本与 SSE。模型 API 和 Codex 每轮最多交接一个函数。使用 `sdk.responses.create()` 调用，默认 `store: false`，由客户端在 `input` 中带回历史。[Responses 示例](docs/api.md#responses)
 - `POST /v1/images/generations` 支持 Codex 文生图和参考图编辑，每次返回一张 Base64 图片及实际宽高。
 - 上游实际报告的 Token 用量；缺失用量保留未知，不伪造为零。
 - 客户端断开/取消、请求超时、并发上限、项目密钥撤销。
 - 管理 API：连接、目录、模型发布、项目密钥、在途请求取消。
 
-**这是明确子集的兼容实现。** 不支持的参数显式报错。Codex 无法保证 `temperature`、`max_tokens` 等语义，所以不会默默接收后忽略。完整参数矩阵见 [兼容性说明](docs/compatibility.md)，管理接口见 [API 文档](docs/api.md)。
+**兼容范围以文档子集为准。** 不支持的参数会显式报错，例如 Codex 会拒绝 `temperature` 和 `max_tokens`。收到 `429` 时，按 `error.code` 区分网关并发已满和上游限流。[兼容矩阵](docs/compatibility.md) · [错误与重试](docs/api.md#errors-and-retries) · [管理接口](docs/api.md#management)
 
 后续规划包括语音、视频、远程设备配对以及 Ollama 模型管理。[路线图](docs/roadmap.md)
 

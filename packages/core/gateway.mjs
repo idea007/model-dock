@@ -202,7 +202,9 @@ export class Gateway {
   }
   #startRequest(name, principal, model, connection, { signal, id }) {
     const concurrent = [...this.active.values()].filter(row => row.connectionId === connection.id || connection.type === 'codex' && row.provider === 'codex').length;
-    if (concurrent >= connection.maxConcurrency || this.active.size >= 32) throw new GatewayError('This connection is at capacity. Retry after the active request finishes.', 429, 'connection_busy');
+    if (concurrent >= connection.maxConcurrency || this.active.size >= 32) {
+      throw new GatewayError('This connection is at capacity. Retry after the active request finishes.', 429, 'connection_busy', null, { retryAfter: '2' });
+    }
     const controller = new AbortController(), started = Date.now();
     const metadata = { id, model: name, nativeModel: model.nativeId, connectionId: connection.id, provider: connection.type, principalId: principal.id, startedAt: new Date(started).toISOString() };
     this.active.set(id, { ...metadata, controller });
@@ -230,17 +232,21 @@ export class Gateway {
     };
   }
   async *generate(body, principal, context) {
-    validateChat(body);
+    const normalized = validateChat(body);
     const { model, route, connection, provider } = this.#resolveModel(body.model, principal);
     if (model.capability === 'image_generation') {
       throw new GatewayError('Use /v1/images/generations for this model.', 400, 'unsupported_model_capability', 'model');
     }
-    const request = applyReasoningPolicy(model, route, body);
+    if (context.responses && connection.type === 'ollama') {
+      const field = normalized.tools?.length ? 'tools' : normalized.messages.some(message => message.tool_calls) ? 'input' : null;
+      if (field) throw new GatewayError('Ollama supports text only on /v1/responses.', 400, 'unsupported_parameter', field);
+    }
+    const request = applyReasoningPolicy(model, route, normalized);
     const run = this.#startRequest(body.model, principal, model, connection, context);
     let measurement = null, done = false, output = 0;
     try {
       for await (const event of provider.generate(connection, { ...request, model: model.nativeId }, {
-        secret: this.store.decrypt(connection.secret), signal: run.signal, model
+        secret: this.store.decrypt(connection.secret), signal: run.signal, model, responses: context.responses
       })) {
         run.signal.throwIfAborted();
         if (event.type === 'delta') { output += Buffer.byteLength(JSON.stringify(event.delta)); if (output > 8 * 1024 * 1024) throw new GatewayError('Output exceeds the 8 MiB limit.', 502, 'output_limit'); }

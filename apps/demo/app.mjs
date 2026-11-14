@@ -100,6 +100,7 @@ function pageContent(status) {
     return apiDocsPage({
       baseUrl,
       models: configured ? state.models.filter(model => model.available !== false) : [],
+      imageModelId: state.imageModelIds?.[0],
       version: state.version,
       expanded: expandedApiEndpoints,
       client: true
@@ -256,10 +257,14 @@ async function run(form) {
       for await (const raw of sse(response.body)) {
         if (raw === '[DONE]') { ended = true; break; }
         const chunk = JSON.parse(raw); if (chunk.error) throw chunk.error;
-        content += chunk.choices?.[0]?.delta?.content || ''; output.textContent = content; if (chunk.usage) usage = chunk.usage;
+        const delta = chunk.choices?.[0]?.delta;
+        content += delta?.refusal || delta?.content || ''; output.textContent = content; if (chunk.usage) usage = chunk.usage;
       }
       if (!ended) throw new LocalizedError('common.streamIncomplete');
-    } else { const data = await response.json(); content = data.choices?.[0]?.message?.content || ''; usage = data.usage; }
+    } else {
+      const data = await response.json(), message = data.choices?.[0]?.message;
+      content = message?.refusal || message?.content || ''; usage = data.usage;
+    }
   } catch (error) {
     status = controller.signal.aborted ? 'common.stopped' : 'common.failed';
     if (!controller.signal.aborted) failure = error;

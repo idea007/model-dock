@@ -4,9 +4,16 @@ import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImage
 export const VERSION = '0.1.0';
 export const SCHEMA_VERSION = 2;
 export class GatewayError extends Error {
-  constructor(message, status = 400, code = 'invalid_request', param = null) {
+  constructor(message, status = 400, code = 'invalid_request', param = null, { retryAfter } = {}) {
     super(message); this.name = 'GatewayError'; this.status = status; this.code = code; this.param = param;
+    this.retryAfter = retryAfter;
   }
+}
+export function normalizeRetryAfter(value) {
+  if (typeof value !== 'string' || !value) return undefined;
+  if (/^\d+$/.test(value)) return value;
+  const date = new Date(value);
+  if (Number.isFinite(date.getTime()) && date.toUTCString() === value) return value;
 }
 export function fail(message, code = 'invalid_request', param = null) {
   throw new GatewayError(message, 400, code, param);
@@ -28,8 +35,9 @@ export function slug(value, name = 'alias') {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(result)) fail(`${name} must contain only letters, digits, dots, hyphens or underscores.`);
   return result;
 }
+export const IMAGE_PARAMS = ['model', 'prompt', 'n', 'response_format', 'aspect_ratio', 'reference_images', 'background'];
 export function validateImageGeneration(body) {
-  exact(body, ['model', 'prompt', 'n', 'response_format', 'aspect_ratio', 'reference_images', 'background']);
+  exact(body, IMAGE_PARAMS);
   const model = string(body.model, 'model', 512);
   if (typeof body.prompt !== 'string' || !body.prompt.trim() || body.prompt.length > 4000
     || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(body.prompt)) {
@@ -71,17 +79,41 @@ export function decodeImageReferences(references = []) {
     return { bytes, format: info.format };
   });
 }
-export const PARAMS = ['model', 'messages', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'stop', 'seed', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'reasoning_effort', 'user'];
+export const PARAMS = ['model', 'messages', 'n', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'stop', 'seed', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'reasoning_effort', 'user'];
 export function validateChat(body) {
   exact(body, PARAMS); string(body.model, 'model', 512);
+  if (body.n !== undefined && body.n !== 1) fail('This endpoint returns one choice per request.', 'unsupported_parameter', 'n');
   if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 2048) fail('messages must be a non-empty array (maximum 2048).');
-  const pending = new Map(), seen = new Set();
-  for (const message of body.messages) {
-    exact(message, ['role', 'content', 'name', 'tool_call_id', 'tool_calls']);
+  const pending = new Set(), seen = new Set();
+  let normalizedMessages;
+  for (const [index, message] of body.messages.entries()) {
+    exact(message, ['role', 'content', 'name', 'tool_call_id', 'tool_calls', 'refusal']);
     if (!['system', 'developer', 'user', 'assistant', 'tool'].includes(message.role)) fail('Unsupported message role.');
     if (message.name !== undefined) string(message.name, 'name', 128);
-    if (message.content !== null && typeof message.content !== 'string') fail('This release accepts text content only.', 'unsupported_content', 'messages');
-    if (message.content === null && !(message.role === 'assistant' && message.tool_calls?.length)) fail('Only assistant tool calls may have null content.');
+    if (message.refusal !== undefined && (message.role !== 'assistant' || message.refusal !== null && typeof message.refusal !== 'string')) {
+      fail('refusal is only valid on assistant messages and must be a string or null.', 'invalid_request', 'messages');
+    }
+    const content = message.content;
+    if (Array.isArray(content)) {
+      if (!content.length) fail('A text content array must contain at least one part.', 'invalid_request', 'messages');
+      const parts = [];
+      for (const part of content) {
+        if (part?.type !== 'text') fail('Only text content parts are supported.', 'unsupported_content', 'messages');
+        exact(part, ['type', 'text']);
+        if (typeof part.text !== 'string') fail('A text content part must contain a string.', 'invalid_request', 'messages');
+        parts.push(part.text);
+      }
+      normalizedMessages ||= [...body.messages];
+      normalizedMessages[index] = { ...message, content: parts.join('') };
+    } else if (content === undefined && message.role === 'assistant' && message.tool_calls?.length) {
+      normalizedMessages ||= [...body.messages];
+      normalizedMessages[index] = { ...message, content: null };
+    } else if (content !== null && typeof content !== 'string') {
+      fail('Use string content or an array of text parts.', 'unsupported_content', 'messages');
+    }
+    if (message.content === null && !(message.role === 'assistant' && (message.tool_calls?.length || message.refusal))) {
+      fail('Only assistant tool calls or refusals may have null content.');
+    }
     if (pending.size && message.role !== 'tool') fail('Every tool call must have a tool result before the next message.');
     if (message.tool_calls !== undefined) {
       if (message.role !== 'assistant' || !Array.isArray(message.tool_calls) || !message.tool_calls.length) fail('Invalid tool calls.');
@@ -90,7 +122,7 @@ export function validateChat(body) {
         exact(call.function, ['name', 'arguments']); string(call.function.name, 'function name', 128);
         if (call.type !== 'function' || seen.has(call.id) || typeof call.function.arguments !== 'string') fail('Invalid or duplicate tool call.');
         try { object(JSON.parse(call.function.arguments), 'tool arguments'); } catch { fail('Tool arguments must be a JSON object.'); }
-        seen.add(call.id); pending.set(call.id, call.function.name);
+        seen.add(call.id); pending.add(call.id);
       }
     }
     if (message.role === 'tool') {
@@ -116,7 +148,7 @@ export function validateChat(body) {
     for (const tool of body.tools) {
       exact(tool, ['type', 'function']); exact(tool.function, ['name', 'description', 'parameters', 'strict']);
       const fn = tool.function;
-      if (tool.type !== 'function' || !/^[A-Za-z0-9_-]{1,128}$/.test(fn.name || '') || names.has(fn.name)) fail('Invalid or duplicate function name.');
+      if (tool.type !== 'function' || typeof fn.name !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(fn.name) || names.has(fn.name)) fail('Invalid or duplicate function name.');
       names.add(fn.name); object(fn.parameters, 'parameters');
       if (fn.parameters.type !== 'object') fail('Function parameters must be an object schema.');
       if (fn.description !== undefined && typeof fn.description !== 'string') fail('Invalid function description.');
@@ -142,7 +174,10 @@ export function validateChat(body) {
       if (format.json_schema.strict !== undefined && typeof format.json_schema.strict !== 'boolean') fail('Invalid strict flag.');
     } else if (format.json_schema !== undefined) fail('json_schema requires type=json_schema.');
   }
-  return body;
+  if (!normalizedMessages && body.n === undefined) return body;
+  const normalized = { ...body, messages: normalizedMessages ?? body.messages };
+  delete normalized.n;
+  return normalized;
 }
 export function errorPayload(error) {
   const known = error instanceof GatewayError;

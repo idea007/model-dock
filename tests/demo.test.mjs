@@ -8,7 +8,7 @@ import { startDemo } from '../apps/demo/server.mjs';
 import { startMockGateway } from './fixtures/demo-gateway.mjs';
 import { DemoStore } from '../apps/demo/store.mjs';
 import { ModelManager } from '../apps/demo/models.mjs';
-import { until } from './helpers.mjs';
+import { fixtureUpstream, setup, until } from './helpers.mjs';
 const settings = state => ({ revision: state.revision, models: state.models.map(({ id, enabled, reasoningPolicy, groupPolicies }) => ({ id, enabled, reasoningPolicy, groupPolicies })), routes: structuredClone(state.routes) });
 async function fixture(t, configured = true) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'model-dock-client-test-')), mock = await startMockGateway();
@@ -16,7 +16,7 @@ async function fixture(t, configured = true) {
   t.after(async () => { await app.close(); await mock.close(); await fs.rm(directory, { recursive: true, force: true }); });
   const request = async (url, body, options = {}) => {
     const response = await fetch(app.origin + url, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${app.store.accessToken}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...options.headers }, body: body === undefined ? undefined : JSON.stringify(body), signal: options.signal });
-    return { status: response.status, data: await response.json() };
+    return { response, status: response.status, data: await response.json() };
   };
   const api = async (url, options = {}) => { const result = await request(url, options.body); if (result.status !== 200) throw new Error(result.data.error.message); return result.data; };
   if (configured) {
@@ -83,7 +83,16 @@ const clientPages = {
 };
 for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${entry || '/'} opens without a token and connects using a server-created project key`, async t => {
   const f = await fixture(t, false), model = f.mock.app.store.read().models[0];
-  const key = await f.mock.app.gateway.createKey({ revision: f.mock.app.store.read().revision, name: 'Browser client', models: [model.id] });
+  const grants = [model.id];
+  const imageModelId = 'demo-source/codex-imagegen';
+  if (entry === '?view=api') {
+    await f.mock.app.store.mutate(f.mock.app.store.read().revision, state => {
+      state.models.push({ id: imageModelId, nativeId: 'codex-imagegen', connectionId: model.connectionId, name: 'Codex image fixture',
+        enabled: true, available: true, capability: 'image_generation', capabilities: { image_generation: true, text: false } });
+    });
+    grants.push(imageModelId);
+  }
+  const key = await f.mock.app.gateway.createKey({ revision: f.mock.app.store.read().revision, name: 'Browser client', models: grants });
   const html = await fs.readFile(new URL('../apps/demo/index.html', import.meta.url), 'utf8');
   const dom = new JSDOM(html, { url: f.app.origin + '/' + entry }), win = dom.window;
   win.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
@@ -124,6 +133,7 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
   if (entry === '?view=api') {
     assert.equal(document.querySelector('.nav [aria-current="page"]').dataset.view, 'api');
     assert.equal(document.querySelector('.api-base-url').textContent, 'http://127.0.0.1:4317/v1');
+    assert.equal(document.querySelector('a[href="/openapi.json"]').getAttribute('download'), 'model-dock.openapi.json');
     click('[data-api-id="chat"] summary');
     assert.ok(document.querySelector('[data-api-id="chat"]').open);
     assert.ok(document.querySelector('#api-code-chat-request').textContent.includes('connection-id/model-id'));
@@ -174,6 +184,21 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
     assert.ok(clipboard.includes('$MODEL_DOCK_API_KEY'));
     assert.equal(JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]).model, model.id, 'a project-authorized model is usable in examples even before enabling it for app features');
     assert.ok(!clipboard.includes(key.token));
+    click('[data-api-id="responses"] summary');
+    click('[data-code-id="api-code-responses-stream"]');
+    assert.ok(clipboard.includes(`${f.mock.connection.baseUrl}/responses`));
+    const { model: responseModel, store, stream } = JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]);
+    assert.deepEqual({ model: responseModel, store, stream }, { model: model.id, store: false, stream: true });
+    assert.ok(!clipboard.includes(key.token));
+    click('[data-api-id="images"] summary');
+    assert.match(document.querySelector('[data-api-id="images"]').textContent, /images\.edit\(\)/);
+    click('[data-code-id="api-code-images-request"]');
+    assert.equal(JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]).model, imageModelId);
+    click('[data-code-id="api-code-images-edit"]');
+    assert.ok(clipboard.includes(imageModelId) && clipboard.includes('reference_images'));
+    assert.ok(!clipboard.includes('connection-id/codex-imagegen') && !clipboard.includes(key.token));
+    assert.deepEqual((await f.api('/api/state')).imageModelIds, [imageModelId]);
+    assert.ok(!f.app.store.read().models.some(row => row.id === imageModelId), 'image examples do not create application model settings');
     assert.ok(!document.querySelector('.api-docs').innerHTML.includes(key.token));
     assert.equal(requests.length, requestCount, 'opening and copying documentation does not call any API');
   }
@@ -181,9 +206,17 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
   assert.equal(document.querySelectorAll('[data-mm="toggle-model"]').length, 1); assert.equal(document.querySelector('#connection-form'), null);
   click('.nav [data-view="settings"]');
   await f.mock.app.gateway.updateModel(model.id, { revision: f.mock.app.store.read().revision, enabled: false });
+  if (entry === '?view=api') await f.mock.app.gateway.updateModel(imageModelId, { revision: f.mock.app.store.read().revision, enabled: false });
   click('[data-action="refresh-models"]');
   await until(() => document.querySelector('#catalog-summary').textContent.includes('0 个') && !document.querySelector('[data-action="refresh-models"]').disabled);
   assert.equal(f.app.store.read().catalog[0].available, false);
+  if (entry === '?view=api') {
+    click('.nav [data-view="api"]');
+    assert.deepEqual((await f.api('/api/state')).imageModelIds, []);
+    assert.ok(document.querySelector('#api-code-images-request').textContent.includes('connection-id/codex-imagegen'));
+    assert.ok(!document.querySelector('#api-code-images-request').textContent.includes(imageModelId));
+    click('.nav [data-view="settings"]');
+  }
   await f.mock.app.gateway.updateModel(model.id, { revision: f.mock.app.store.read().revision, enabled: true });
   if (entry === '?view=settings') {
     click('[data-language="en"]');
@@ -200,6 +233,28 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
   } else assert.match(document.querySelector('#catalog-summary').textContent, /1 个/);
   assert.equal(requests.filter(url => url === '/api/session').length, 2);
   assert.ok(requests.every(url => url.startsWith('/api/')), 'the browser only calls its own client backend');
+});
+
+test('client run preserves gateway diagnostics for upstream rate limits', async t => {
+  const f = await fixture(t, false), upstream = await fixtureUpstream(t);
+  const gateway = await setup(t);
+  const connection = await gateway.connection('openai', upstream.origin + '/v1');
+  const model = connection + '/shared';
+  await gateway.enable(model);
+  const project = await gateway.mutate('/admin/keys', 'POST', { name: 'Rate limit client', models: [model] });
+  const { state } = await f.api('/api/connection', { body: { revision: 0, baseUrl: gateway.origin + '/v1', apiKey: project.data.token } });
+  const draft = settings(state);
+  draft.models[0].enabled = true;
+  const feature = draft.routes.find(row => row.id === 'chat');
+  feature.modelId = model;
+  feature.allowedModelIds = [model];
+  await f.api('/api/settings', { body: draft });
+
+  const limited = await f.request('/api/run', { featureId: 'chat', prompt: 'rate-limit-seconds', stream: true });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.data.error.code, 'upstream_rate_limited');
+  assert.equal(limited.response.headers.get('retry-after'), '90');
+  assert.equal(limited.response.headers.get('x-request-id'), gateway.gateway.history[0].id);
 });
 
 test('client settings stay independent, enforce single/multiple defaults and reasoning inheritance during real gateway requests', async t => {

@@ -22,9 +22,10 @@ export const openai = {
       };
     });
   },
-  async *generate(connection, request, { secret, signal }) {
+  async *generate(connection, request, { secret, signal, responses }) {
+    const body = responses ? { ...request, store: false } : request;
     const response = await fetchUpstream(`${connection.baseUrl}/chat/completions`, {
-      method: 'POST', headers: headers(secret), body: JSON.stringify(request), signal
+      method: 'POST', headers: headers(secret), body: JSON.stringify(body), signal
     });
     if (!request.stream) {
       const result = await jsonResponse(response);
@@ -33,7 +34,11 @@ export const openai = {
       const message = choice.message;
       if (message.content != null && typeof message.content !== 'string') throw protocolError();
       if (message.tool_calls !== undefined && !Array.isArray(message.tool_calls)) throw protocolError();
-      yield { type: 'delta', delta: { ...(message.content != null ? { content: message.content } : {}), ...(message.tool_calls ? { tool_calls: message.tool_calls.map((call, index) => ({ index, ...call })) } : {}) } };
+      yield { type: 'delta', delta: {
+        ...(message.content != null ? { content: message.content } : {}),
+        ...(message.refusal != null ? { refusal: message.refusal } : {}),
+        ...(message.tool_calls ? { tool_calls: message.tool_calls.map((call, index) => ({ index, ...call })) } : {})
+      } };
       if (usage(result.usage)) yield { type: 'usage', usage: usage(result.usage) };
       yield { type: 'done', finishReason: choice.finish_reason }; return;
     }

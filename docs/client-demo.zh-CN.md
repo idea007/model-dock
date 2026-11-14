@@ -24,7 +24,7 @@ model-dock-demo --open
 
 「接入设置」与「应用体验」「功能与模型」并列于左侧导航，移动端也可访问，可通过 `/?view=settings` 直接打开。连接验证失败时显示错误，不保存无效密钥。已保存的连接在接入端重启后继续使用。
 
-左侧「接口文档」（`/?view=api`）可展开查看服务端接口说明并复制 cURL 示例。尚未连接时也可以查阅，连接后示例使用接入设置中的服务端地址。
+左侧「接口文档」（`/?view=api`）可查看网关接口、复制 cURL 示例和下载 [OpenAPI 3.1 规范](openapi.json)。连接后，示例使用已保存的网关地址和项目授权的模型 ID，包括可用的 Codex 图片模型。应用功能使用文本模型目录。
 
 服务端保存模型开关、能力或思考深度后，在「接入设置」或「功能与模型」点击「刷新模型」即可同步，无需重新填写密钥。接入设置会显示可用授权模型数量与最近成功同步时间；重新打开页面也会更新目录。未保存的应用草稿会保留，其他页面对应用设置的并发修改仍会触发版本冲突。
 
@@ -50,10 +50,12 @@ model-dock-demo --open
 这些接口属于接入端进程，与网关管理接口相互独立。静态资源、`/healthz` 和会话建立接口无需令牌，其余接口需要本地会话 Bearer 令牌、同源访问，POST 使用 JSON。
 
 - `POST /api/session`：使用 `X-Model-Dock-Client: 1` 请求头自动建立页面会话，返回 `{session}`；拒绝其他来源的页面请求。
-- `GET /api/state`：不含密钥的应用状态。
+- `GET /api/state` 返回应用状态，包含文本模型偏好和供接口示例使用的已授权 `imageModelIds`。
 - `POST /api/connection`：提交 `revision, baseUrl, apiKey`，读取并连接授权目录。
 - `POST /api/refresh`：提交 `revision`，刷新目录并保留失效选择。
 - `POST /api/settings`：提交 `revision, models, routes`，原子保存完整草稿。
 - `POST /api/run`：提交 `featureId, prompt` 及可选的 `modelId, reasoningEffort, stream`，解析功能后向网关发送 JSON/SSE 请求。
 
-内部字段 `routes` 沿用旧命名，表示应用功能列表，不会发送给网关管理接口。完整字段与代码入口见 [英文接口说明](client-demo.md#demo-local-api)。
+运行响应会附带网关提供的 `x-request-id`。收到 `429` 时，也会保留网关给出的有效 `Retry-After`。
+
+`routes` 表示接入端的应用功能列表。完整字段与代码入口见 [英文接口说明](client-demo.md#demo-local-api)。
