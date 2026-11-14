@@ -1,12 +1,31 @@
 # API reference · v0.1
 
-All endpoints except the console assets and `/healthz` require `Authorization: Bearer <token>`. Management endpoints require the local administrator token. Requests with bodies require `Content-Type: application/json`. The server only listens on `127.0.0.1`; cross-origin browser requests and unrecognized Host values are rejected.
+Send `Authorization: Bearer <token>` to access management and inference endpoints. Management requires the local administrator token or a console session. Console assets, session-link redemption and `/healthz` are available before sign-in. Requests with bodies require `Content-Type: application/json`. The server only listens on `127.0.0.1` and checks the browser origin and Host header.
 
 ## Inference
 
 `GET /v1/models` returns only enabled and available models/aliases permitted by the current key.
 
 `POST /v1/chat/completions` accepts the subset in [compatibility.md](compatibility.md). The `model` field is required and is either an exact connection-qualified model ID or a compatible legacy alias. Client abort or connection close cancels the upstream. Every response includes `x-request-id`.
+
+`POST /v1/images/generations` generates or edits a single image using a published `connection-id/codex-imagegen` and a project key that can access it. Send JSON with `model` and a `prompt` of up to 4,000 characters.
+
+```json
+{"model":"connection-id/codex-imagegen","prompt":"A blue ceramic cup on a light background"}
+```
+
+| Optional field | Accepted values |
+| --- | --- |
+| `reference_images` | Up to 5 ordered Base64 data URLs with MIME type `image/png`, `image/jpeg`, or `image/webp`. Send at most 30 MiB per decoded image and 50 MiB in total. The complete JSON body may be up to 70 MiB. |
+| `aspect_ratio` | `16:9`, `9:16`, `1:1`, or `4:5`. Omit it to let Codex choose a canvas. |
+| `background` | `auto` or `transparent`. `transparent` asks Codex for real alpha pixels. |
+| `n`, `response_format` | `1` and `b64_json`, respectively. |
+
+Refer to attachments in the prompt by their order, starting at 1. For example, `Keep the subject from image 1 and use the background from image 2`. The gateway passes the requested canvas and background to Codex as instructions. Actual dimensions, format and transparency depend on the generated result.
+
+The request waits for one result. Read `data[0].b64_json` for the image, `data[0].width` and `data[0].height` for its pixel dimensions, and `output_format` for its encoding (`png`, `jpeg`, or `webp`). To continue editing, pass the result as a reference using `` `data:image/${output_format};base64,${data[0].b64_json}` ``. The playground's **继续编辑** button adds the result as the first reference for a new request. You can then add more references.
+
+Text and image calls share the single Codex request slot. Connection timeout, cancellation and key revocation apply to both. A disconnected request has no result-recovery endpoint. The gateway submits the turn once. When using an SDK, set `maxRetries: 0` to avoid a second generation if the first response is lost.
 
 ## Management
 
@@ -40,6 +59,8 @@ Errors follow `{ "error": { "message", "type", "code", "param" } }`. Typical cod
 ## Authorized model metadata
 
 `GET /v1/models` includes safe metadata for each authorized native model: `name`, `source: {id, name, type}`, boolean-or-null `capabilities` (`text`, `tools`, `structured`, `thinking`), `context_window`, `reasoning_efforts`, and `default_reasoning_effort`. It never includes provider URLs, provider secrets, administrator settings, or project tokens. Missing capability values stay unknown. Existing aliases are tagged `legacy_alias: true`; they do not expose target model metadata beyond the caller's scope.
+
+For `codex-imagegen`, `capabilities.image_generation` is `true` and `capabilities.text` is `false`.
 
 The optional fields extend the standard model-list shape; model IDs remain connection-qualified. Reading a model does not prove upstream inference permission. The client demo filters legacy aliases and only builds functions from authorized native models.
 

@@ -1,9 +1,10 @@
 # Release boundaries
 
-## v0.1 — local text gateway (implemented)
+## v0.1 — local model gateway (implemented)
 
 - One installable Node package; separate core/protocol/providers/console modules.
 - API, Ollama and Codex adapters; JSON and SSE Chat Completions.
+- Codex single-image generation with model publication and project-key access.
 - Credential management, model discovery/manual registration, publication and compatibility for existing aliases.
 - Independent client demo for standalone/grouped features, explicit model defaults and reasoning preferences.
 - Scoped project keys, cancellation, capacity limits and bounded metadata.
@@ -25,7 +26,7 @@ Required work before advertising support:
 ## Later — runtime lifecycle and additional capabilities
 
 - Ollama pull progress, cancellation, loaded-model status and explicit unload/delete actions.
-- Embeddings, then image/audio/video adapters with their own job and artifact contracts.
+- Embeddings and additional image, audio and video adapters with job and artifact contracts.
 - Native provider protocols beyond OpenAI-compatible APIs.
 - OS credential-store integration, durable usage/export and richer per-function parameter policies.
 - Optional embeddable UI/SDK packages after external consumers establish their requirements.

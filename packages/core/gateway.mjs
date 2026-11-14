@@ -1,4 +1,4 @@
-import { GatewayError, exact, string, slug, validateChat } from '../protocol/index.mjs';
+import { GatewayError, exact, string, slug, validateChat, validateImageGeneration, decodeImageReferences } from '../protocol/index.mjs';
 import { digest, equalSecret, newId, newToken } from './store.mjs';
 import { createProviders } from '../providers/index.mjs';
 import { saveModelSettings, applyReasoningPolicy } from './model-settings.mjs';
@@ -58,7 +58,8 @@ export class Gateway {
       const allowed = model.reasoningPolicy?.allowedEfforts || declared;
       return { id: model.id, object: 'model', created: 0, owned_by: model.connectionId, name: model.name,
         source: { id: connection.id, name: connection.name, type: connection.type },
-        capabilities: Object.fromEntries(['text', 'tools', 'structured', 'thinking'].map(key => [key, typeof model.capabilities?.[key] === 'boolean' ? model.capabilities[key] : null])), context_window: model.contextWindow || null,
+        capabilities: { ...Object.fromEntries(['text', 'tools', 'structured', 'thinking'].map(key => [key, typeof model.capabilities?.[key] === 'boolean' ? model.capabilities[key] : null])),
+          ...(model.capability === 'image_generation' ? { image_generation: true } : {}) }, context_window: model.contextWindow || null,
         reasoning_efforts: declared.filter(level => allowed.includes(level)),
         default_reasoning_effort: model.reasoningPolicy?.defaultEffort || model.defaultEffort || null };
     });
@@ -75,7 +76,7 @@ export class Gateway {
       providers: [
         { id: 'openai', label: 'OpenAI-compatible API', capabilities: 'Provider-defined', parameters: 'Chat Completions subset; see compatibility documentation.' },
         { id: 'ollama', label: 'Ollama', capabilities: 'Text, model-dependent tools and thinking, JSON' },
-        { id: 'codex', label: 'Codex CLI', capabilities: 'Text, JSON, one application tool call per turn', experimental: true }
+        { id: 'codex', label: 'Codex CLI', capabilities: 'Text, JSON, application tools, native image generation', experimental: true }
       ] };
   }
   async saveConnection(input, id) {
@@ -191,46 +192,90 @@ export class Gateway {
     row.status = error?.status === 499 ? 'cancelled' : 'failed';
     row.errorCode = error instanceof GatewayError ? error.code : 'response_failed';
   }
-  async *generate(body, principal, { signal, id }) {
-    validateChat(body);
-    if (!this.keyAllows(principal, body.model)) throw new GatewayError('This key cannot use the selected model.', 403, 'model_forbidden');
-    const state = this.store.read(), route = state.routes.find(item => item.id === body.model);
-    const model = state.models.find(item => item.id === (route?.modelId || body.model));
+  #resolveModel(name, principal) {
+    if (!this.keyAllows(principal, name)) throw new GatewayError('This key cannot use the selected model.', 403, 'model_forbidden');
+    const state = this.store.read(), route = state.routes.find(item => item.id === name);
+    const model = state.models.find(item => item.id === (route?.modelId || name));
     if (!model || !activeModel(state, model)) throw new GatewayError('The selected model is disabled or unavailable. Choose it explicitly in model management.', 404, 'model_unavailable');
-    const request = applyReasoningPolicy(model, route, body);
     const connection = state.connections.find(item => item.id === model.connectionId);
+    return { model, route, connection, provider: this.providers[connection.type] };
+  }
+  #startRequest(name, principal, model, connection, { signal, id }) {
     const concurrent = [...this.active.values()].filter(row => row.connectionId === connection.id || connection.type === 'codex' && row.provider === 'codex').length;
     if (concurrent >= connection.maxConcurrency || this.active.size >= 32) throw new GatewayError('This connection is at capacity. Retry after the active request finishes.', 429, 'connection_busy');
     const controller = new AbortController(), started = Date.now();
-    const row = { id, model: body.model, nativeModel: model.nativeId, connectionId: connection.id, provider: connection.type, principalId: principal.id, startedAt: new Date(started).toISOString(), controller };
-    this.active.set(id, row); let status = 'failed', code = null, measurement = null, done = false, output = 0;
+    const metadata = { id, model: name, nativeModel: model.nativeId, connectionId: connection.id, provider: connection.type, principalId: principal.id, startedAt: new Date(started).toISOString() };
+    this.active.set(id, { ...metadata, controller });
     const combined = AbortSignal.any([signal, controller.signal, AbortSignal.timeout(connection.timeoutSeconds * 1000)]);
+    let status = 'failed', errorCode = null;
+    return {
+      signal: combined,
+      succeed() { status = 'succeeded'; },
+      fail(error) {
+        if (combined.aborted) {
+          const timeout = combined.reason?.name === 'TimeoutError';
+          error = combined.reason instanceof GatewayError ? combined.reason
+            : new GatewayError(timeout ? 'Request timed out.' : 'Request cancelled.', timeout ? 504 : 499, timeout ? 'request_timeout' : 'request_cancelled');
+          status = timeout ? 'failed' : 'cancelled';
+        }
+        errorCode = error instanceof GatewayError ? error.code : 'provider_failed';
+        return error;
+      },
+      finish: usage => {
+        controller.abort(new GatewayError('Request completed or consumer disconnected.', 499, 'request_cancelled'));
+        this.active.delete(id);
+        this.history.unshift({ ...metadata, status, errorCode, durationMs: Date.now() - started, usage });
+        this.history = this.history.slice(0, 100);
+      }
+    };
+  }
+  async *generate(body, principal, context) {
+    validateChat(body);
+    const { model, route, connection, provider } = this.#resolveModel(body.model, principal);
+    if (model.capability === 'image_generation') {
+      throw new GatewayError('Use /v1/images/generations for this model.', 400, 'unsupported_model_capability', 'model');
+    }
+    const request = applyReasoningPolicy(model, route, body);
+    const run = this.#startRequest(body.model, principal, model, connection, context);
+    let measurement = null, done = false, output = 0;
     try {
-      for await (const event of this.providers[connection.type].generate(connection, { ...request, model: model.nativeId }, {
-        secret: this.store.decrypt(connection.secret), signal: combined, model
+      for await (const event of provider.generate(connection, { ...request, model: model.nativeId }, {
+        secret: this.store.decrypt(connection.secret), signal: run.signal, model
       })) {
-        combined.throwIfAborted();
+        run.signal.throwIfAborted();
         if (event.type === 'delta') { output += Buffer.byteLength(JSON.stringify(event.delta)); if (output > 8 * 1024 * 1024) throw new GatewayError('Output exceeds the 8 MiB limit.', 502, 'output_limit'); }
         if (event.type === 'usage') measurement = event.usage;
         if (event.type === 'done') done = true;
         yield event;
       }
       if (!done) throw new GatewayError('Provider ended without a terminal response.', 502, 'upstream_protocol_error');
-      status = 'succeeded';
+      run.succeed();
     } catch (error) {
-      if (combined.aborted) {
-        const timeout = combined.reason?.name === 'TimeoutError';
-        const abort = combined.reason instanceof GatewayError ? combined.reason : new GatewayError(timeout ? 'Request timed out.' : 'Request cancelled.', timeout ? 504 : 499, timeout ? 'request_timeout' : 'request_cancelled');
-        status = timeout ? 'failed' : 'cancelled'; code = abort.code; throw abort;
-      }
-      code = error instanceof GatewayError ? error.code : 'provider_failed'; throw error;
+      throw run.fail(error);
     } finally {
-      // A closed consumer must also stop the native model request.
-      controller.abort(new GatewayError('Request completed or consumer disconnected.', 499, 'request_cancelled'));
-      this.active.delete(id);
-      const { controller: ignored, ...metadata } = row;
-      this.history.unshift({ ...metadata, status, errorCode: code, durationMs: Date.now() - started, usage: measurement });
-      this.history = this.history.slice(0, 100);
+      run.finish(measurement);
+    }
+  }
+  async generateImage(body, principal, context) {
+    const request = validateImageGeneration(body);
+    const { model, connection, provider } = this.#resolveModel(request.model, principal);
+    if (model.capability !== 'image_generation' || typeof provider?.generateImage !== 'function') {
+      throw new GatewayError('Choose an image generation model.', 400, 'unsupported_model_capability', 'model');
+    }
+    const referenceImages = decodeImageReferences(body.reference_images);
+    const run = this.#startRequest(request.model, principal, model, connection, context);
+    let usage = null;
+    try {
+      const result = await provider.generateImage(connection, { ...request, model: model.nativeId, referenceImages }, { signal: run.signal, model });
+      run.signal.throwIfAborted();
+      usage = result.usage ?? null;
+      run.succeed();
+      return { created: Math.floor(Date.now() / 1000), output_format: result.format,
+        data: [{ b64_json: result.b64_json, width: result.width, height: result.height }] };
+    } catch (error) {
+      throw run.fail(error);
+    } finally {
+      run.finish(usage);
     }
   }
   async close() {

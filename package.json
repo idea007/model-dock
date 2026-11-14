@@ -36,13 +36,13 @@
   "scripts": {
     "start": "node apps/gateway/cli.mjs serve",
     "dev": "node apps/gateway/cli.mjs serve",
+    "console": "node apps/gateway/cli.mjs open",
     "token": "node apps/gateway/cli.mjs token",
     "check": "node scripts/check.mjs",
     "test": "node --test",
     "verify": "npm run check && npm test",
     "pack:check": "node scripts/pack-smoke.mjs",
-    "demo": "node apps/demo/cli.mjs",
-    "demo:mock": "node apps/demo/cli.mjs --mock"
+    "demo": "node apps/demo/cli.mjs"
   },
   "devDependencies": {
     "jsdom": "27.4.0",

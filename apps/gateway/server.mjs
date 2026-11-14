@@ -7,6 +7,8 @@ import { Store, newId } from '../../packages/core/store.mjs';
 import { Gateway } from '../../packages/core/gateway.mjs';
 import { assertLoopbackRequest } from '../../packages/protocol/loopback.mjs';
 import { GatewayError, VERSION, errorPayload, exact, object } from '../../packages/protocol/index.mjs';
+import { maxImageRequestBytes } from '../../packages/protocol/image-options.mjs';
+import { ConsoleSessions } from './console-sessions.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const staticFiles = new Map([
@@ -14,22 +16,31 @@ const staticFiles = new Map([
   ['/assets/app.mjs', [path.join(directory, '../console/app.mjs'), 'text/javascript; charset=utf-8']],
   ['/assets/style.css', [path.join(directory, '../console/style.css'), 'text/css; charset=utf-8']],
   ['/assets/models.css', [path.join(directory, '../console/models.css'), 'text/css; charset=utf-8']],
-  ['/assets/events.mjs', [path.join(directory, '../../packages/protocol/events.mjs'), 'text/javascript; charset=utf-8']]
+  ['/assets/events.mjs', [path.join(directory, '../../packages/protocol/events.mjs'), 'text/javascript; charset=utf-8']],
+  ['/assets/image-options.mjs', [path.join(directory, '../../packages/protocol/image-options.mjs'), 'text/javascript; charset=utf-8']]
 ]);
 function json(response, status, value) {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   response.end(JSON.stringify(value));
 }
-async function readBody(request) {
+async function readBody(request, limit = 2 * 1024 * 1024) {
   if (!String(request.headers['content-type'] || '').toLowerCase().startsWith('application/json')) throw new GatewayError('Use Content-Type: application/json.', 415, 'unsupported_media_type');
+  const tooLarge = () => new GatewayError(`Request exceeds the ${limit / (1024 * 1024)} MiB limit.`, 413, 'request_too_large');
+  if (Number(request.headers['content-length']) > limit) {
+    request.resume();
+    throw tooLarge();
+  }
   const chunks = []; let size = 0;
-  for await (const chunk of request) {
+  for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     size += chunk.length;
-    if (size > 2 * 1024 * 1024) throw new GatewayError('Request exceeds the 2 MiB limit.', 413, 'request_too_large');
+    if (size > limit) {
+      request.resume();
+      throw tooLarge();
+    }
     chunks.push(chunk);
   }
   let value;
-  try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  try { value = JSON.parse(Buffer.concat(chunks, size).toString('utf8')); }
   catch { throw new GatewayError('Request body must be valid JSON.'); }
   return object(value);
 }
@@ -104,6 +115,7 @@ async function chat(response, gateway, body, principal, controller, id) {
 export async function startGateway(options) {
   const store = await new Store(options.directory).open();
   const gateway = new Gateway(store, options);
+  const sessions = new ConsoleSessions();
   let origin;
   const controllers = new Set();
   const server = http.createServer(async (request, response) => {
@@ -125,10 +137,33 @@ export async function startGateway(options) {
         response.writeHead(200, { 'content-type': contentType, 'cache-control': 'no-store' }); response.end(bytes); return;
       }
       const token = String(request.headers.authorization || '').match(/^Bearer ([^\s]+)$/)?.[1];
-      const principal = gateway.authenticate(token, pathname.startsWith('/admin/'));
+      if (request.method === 'POST' && pathname === '/admin/console-links') {
+        gateway.authenticate(token, true);
+        json(response, 200, { url: sessions.link(origin) }); return;
+      }
+      if (request.method === 'POST' && pathname === '/console/session') {
+        const body = await readBody(request);
+        exact(body, ['code']);
+        const session = sessions.redeem(body.code, token);
+        json(response, 200, { session }); return;
+      }
+      if (request.method === 'DELETE' && pathname === '/console/session') {
+        sessions.revoke(token);
+        json(response, 200, { ok: true }); return;
+      }
+      const principal = sessions.authenticate(token)
+        ? gateway.authenticate(store.adminToken, true)
+        : gateway.authenticate(token, pathname.startsWith('/admin/'));
       if (request.method === 'GET' && pathname === '/v1/models') { json(response, 200, gateway.catalog(principal)); return; }
       if (request.method === 'POST' && pathname === '/v1/chat/completions') {
         await chat(response, gateway, await readBody(request), principal, controller, id); return;
+      }
+      if (request.method === 'POST' && pathname === '/v1/images/generations') {
+        const imageRequestId = newId('img');
+        response.setHeader('x-request-id', imageRequestId);
+        const result = await gateway.generateImage(await readBody(request, maxImageRequestBytes), principal, { signal: controller.signal, id: imageRequestId });
+        json(response, 200, result);
+        return;
       }
       if (request.method === 'GET' && pathname === '/admin/state') { json(response, 200, { ...gateway.snapshot(), version: VERSION, baseUrl: `${origin}/v1` }); return; }
       let result;
@@ -173,6 +208,7 @@ export async function startGateway(options) {
   origin = `http://127.0.0.1:${server.address().port}`;
   let closing;
   return { origin, server, store, gateway,
+    consoleLink: () => sessions.link(origin),
     close() {
       closing ||= (async () => {
         for (const controller of controllers) controller.abort(new GatewayError('Gateway is shutting down.', 503, 'shutting_down'));

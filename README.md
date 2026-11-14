@@ -14,12 +14,14 @@ Requires **Node.js 22.12+**. Node.js 24 LTS is recommended.
 git clone https://github.com/idea007/model-dock.git
 cd model-dock
 npm ci
-npm start -- --open
+npm start
 ```
 
 The console runs at **http://127.0.0.1:4317** by default. The API base URL is **http://127.0.0.1:4317/v1**.
 
-`--open` opens an authenticated local console page in your default browser. If you start with `npm start` alone, run `npm run token` in another terminal to retrieve the administrator token and sign in. The gateway listens only on loopback and does not depend on a hosted platform or the original blog project.
+Starting the server automatically opens and signs in to the console in your default browser. Use `npm start -- --no-open` to run the service without opening a browser. The existing `--open` option remains supported. The gateway listens only on loopback.
+
+While the gateway is running, use `npm run console` to reopen and sign in to the console. To open it in a specific browser, run `npm run --silent console -- --print` and paste the one-time URL into its address bar. Tabs at the same address share the sign-in within that browser for up to seven days. Restarting the gateway automatically opens the console and signs in again, unless `--no-open` is used.
 
 The console currently uses Chinese labels:
 
@@ -31,15 +33,13 @@ The console currently uses Chinese labels:
 ## Try the independent client demo
 
 ```sh
-# No model account needed; uses an isolated simulated gateway
-npm run demo:mock -- --open
-# Or connect the demo to your running Model Dock with a project key
+# Connect using a project key created by your Model Dock server
 npm run demo -- --open
 ```
 
-The client demo runs at **http://127.0.0.1:4318** in a separate process and data directory. It includes standalone conversation/extraction, content and development groups, single-model and multiple-candidate choices, independent defaults, reasoning inheritance, and a streaming runner.
+The client runs at **http://127.0.0.1:4318** and opens directly without a manual local-session login. Open **Connection settings** (`接入设置`) in the left navigation and enter the server API address and a `md_key_…` key created under **Project access** to load its authorized models. Before connection, the model catalog is empty; no simulated data is supplied. It has a separate process and data directory, with standalone conversation/extraction, content and development groups, single-model and multiple-candidate choices, independent defaults, reasoning inheritance, and a streaming runner.
 
-**Functions & models** (`功能与模型`) has moved here. Its credential/function views, search, expandable groups, resizable columns, save/revert controls and recoverable drafts affect only this application. The app backend reads authorized models and forwards requests using a project key; it never uses administrator APIs. Mock mode is explicitly labeled and never contacts real models. See the [demo setup](docs/client-demo.md) and [model preference guide](docs/model-settings.md).
+**Functions & models** (`功能与模型`) has moved here. Its credential/function views, search, expandable groups, resizable columns, save/revert controls and recoverable drafts affect only this application. The app backend reads authorized models and forwards real requests using a project key; it never uses administrator APIs. The dedicated **Connection settings** (`接入设置`) page in the left navigation manages the address and key. **Refresh models** (`刷新模型`) synchronizes server publication flags, capabilities and reasoning levels; reopening the page also refreshes the catalog. See the [client setup](docs/client-demo.md) and [model preference guide](docs/model-settings.md).
 
 | Server console · 4317 | Client demo · 4318 |
 | --- | --- |
@@ -81,11 +81,13 @@ See the [plain JavaScript example](examples/chat.mjs), [Python SDK example](exam
 | --- | --- | --- |
 | Your own API | OpenAI-compatible base URL + API key | Multiple connections, model discovery or manual registration, publication controls and project access scopes |
 | Ollama | Native local HTTP API | Installed-model discovery, capability and context metadata, text inference, streaming, JSON, and model-supported tool calls |
-| Codex (experimental) | Locally installed and signed-in CLI / App Server | Model catalog, reasoning effort levels, text, streaming, JSON, application tool calls, and cancellation |
+| Codex (experimental) | Locally installed and signed-in CLI / App Server | Model catalog, text and tool calls, image generation and reference-based editing |
 
 Install and start Ollama separately, then download a model with a command such as `ollama pull <model>`. Model Dock does not download weights at startup or during status checks. Context metadata is displayed for reference; inference does not automatically raise `num_ctx` to the model's maximum.
 
 Codex uses native JSON-RPC and creates a temporary thread for each request. Shell, browser, plugin, and host MCP capabilities are isolated. Application tool calls are returned to the caller for execution; the gateway does not execute them on the app's behalf. This is a real model bridge using the account or upstream configured in Codex and its associated quota. `model/list` is only a catalog and does not establish that the current account can run a particular model.
+
+Discover models on the Codex connection and publish `codex-imagegen` under **模型与服务 → 图片生成**. In **调用测试**, add up to five reference images, choose an aspect ratio, request a transparent background, or reuse a result with **继续编辑**. Projects can grant their key access to this model and call `POST /v1/images/generations`. Requests use the signed-in Codex account's quota. [Images endpoint](docs/api.md#inference)
 
 Codex inherits `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` from the environment that starts the gateway. When no proxy is explicitly configured, macOS detects enabled system HTTP/HTTPS proxies on loopback and passes them only to the Codex child process, without changing system settings. PAC and non-loopback proxies are not imported automatically; set the environment variables explicitly on other platforms or for custom networks. If model listing works but inference keeps reconnecting, check the CLI's proxy connection first.
 
@@ -95,13 +97,14 @@ Built-in Codex authentication has a different scope from hosted services. For co
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`: text messages, non-streaming JSON, SSE, tool calls, and tool-result round trips.
+- `POST /v1/images/generations` returns one Base64-encoded image from Codex.
 - Token usage as reported by the upstream. Missing usage stays unknown rather than being fabricated as zero.
 - Client disconnects and cancellation, request timeouts, concurrency limits, and project-key revocation.
 - Management APIs for connections, catalogs, model publication, project keys, and cancellation of in-flight requests.
 
 **Compatibility is limited to an explicit subset.** Unsupported parameters return errors. Codex cannot guarantee the semantics of options such as `temperature` or `max_tokens`, so it does not silently accept and ignore them. See the [compatibility matrix](docs/compatibility.md) and [management API documentation](docs/api.md).
 
-The initial release does not include the Responses API, image/audio/video support, remote device pairing, multi-user hosting, billing, automatic provider fallback, or Ollama model download/deletion/loading management. See the [roadmap](docs/roadmap.md) for the next phase.
+Later work includes audio and video capabilities, remote device pairing, and Ollama model management. [Roadmap](docs/roadmap.md)
 
 ## Data and configuration
 
@@ -135,8 +138,8 @@ Install a locally built package:
 
 ```sh
 npm install --global ./lab-model-dock-0.1.0.tgz
-model-dock serve --open
-model-dock-demo --mock --open
+model-dock serve
+model-dock-demo --open
 ```
 
 Source repository: [idea007/model-dock](https://github.com/idea007/model-dock). The npm package name is `lab-model-dock`; it has not been published to npm. The installation command above uses a locally generated tarball. Building does not require the original blog repository, its database, or its environment files.
@@ -148,7 +151,7 @@ See the [verification record](docs/verification.md) for the initial test results
 ```text
 apps/gateway/       CLI, HTTP, and static asset entry points
 apps/console/       Server management console with no build step
-apps/demo/          Independent consuming app, private settings, UI and mock mode
+apps/demo/          Independent consuming app, private settings and gateway UI
 packages/core/      Persistence, authorization, catalogs, routing, and request controls
 packages/protocol/  Validation, errors, and streaming protocol
 packages/providers/ OpenAI-compatible, Ollama, and Codex adapters

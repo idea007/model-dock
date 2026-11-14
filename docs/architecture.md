@@ -5,9 +5,9 @@ One repository contains independently replaceable protocol, core, provider, gate
 ## Request ownership
 
 1. HTTP validates loopback Host/Origin and authenticates a scoped project token or the administrator.
-2. Core validates the text request, resolves a model/alias to its connection, checks enabled/available state and key scope, and reserves bounded capacity.
-3. The provider emits delta, usage and terminal events. It owns upstream protocol translation and cancellation.
-4. HTTP formats either Chat Completions JSON or SSE. The API caller owns function execution.
+2. Core validates the request, resolves a model or alias to its connection, checks publication and key scope, and reserves bounded capacity.
+3. The provider translates the upstream protocol and propagates cancellation. It emits chat events or returns a complete image.
+4. HTTP formats Chat Completions JSON or SSE, or returns an Images JSON response. The API caller owns function execution.
 
 A model's identity is `connectionId/nativeModelId`. Two connections to the same model name remain separate. Existing aliases are retained for compatibility; new application functions live in the consuming app. Removing a connection leaves its aliases visibly unavailable; it never points them at another provider. New discovery does not enable models or grant key permissions.
 
@@ -61,11 +61,11 @@ flowchart LR
   Gateway --- Supply[Credentials, publication and project scopes]
 ```
 
-`apps/demo` is optional and independently runnable. It does not import the gateway core for normal operation: its backend uses the public project-scoped HTTP API. Only explicit `--mock` mode starts a separate temporary gateway with deterministic providers. No production account or provider is read by that mock fixture.
+`apps/demo` is optional and independently runnable. It does not import the gateway core: its backend uses the public project-scoped HTTP API. The UI opens directly and accepts the server URL and a server-created project key. It starts with an empty model catalog; deterministic providers exist only under `tests/fixtures` and are excluded from the distribution.
 
 The app caches authorized metadata, keeps its own function catalog and validates single/multiple selections and reasoning inheritance before building a native model request. The gateway independently enforces its current publication, key scopes, capacity and provider constraints on every call. A cached selection is never an authorization grant. Missing models remain visibly unavailable, and invalid defaults never trigger fallback. Cancellation propagates through the client backend to the gateway.
 
-The demo has a separate private directory, session token, single-writer lock and revision-checked atomic store. The browser only receives safe metadata and preferences. Its project key remains in the backend's private `client.json` file (not encrypted). Both UI views share a per-tab draft with conflict preservation. See [client setup](client-demo.md) and [preferences](model-settings.md).
+The demo has a separate private directory, single-writer lock and revision-checked atomic store. A same-origin `POST /api/session` with the custom `X-Model-Dock-Client: 1` header automatically establishes a process-lifetime browser session held only in page memory. Host/Origin and Fetch Metadata checks plus the preflight requirement prevent foreign pages from bootstrapping it. The legacy `access.token` remains available for local scripts. The browser receives safe metadata and preferences; the submitted project key remains in the backend's private `client.json` file (not encrypted) and is never returned. Both UI views share a per-tab draft with conflict preservation. See [client setup](client-demo.md) and [preferences](model-settings.md).
 
 ## Compatibility and schema v2
 

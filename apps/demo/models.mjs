@@ -37,18 +37,34 @@ export class ModelManager {
   reset() { this.snapshot = this.base = this.draft = null; this.restored = false; this.error = this.notice = ''; sessionStorage.removeItem(storageKey); }
   accept(state, discard = false) {
     this.latest = state;
-    if (!discard && this.dirtyCount) return;
+    if (!discard && this.dirtyCount) { this.acceptCatalog(state); return; }
     this.snapshot = state; this.base = config(state); this.draft = clone(this.base);
+    if (discard) { this.restored = true; this.remember(); }
     if (!this.restored && !discard) {
       this.restored = true;
       try {
         const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null');
-        if (saved?.base && Array.isArray(saved.draft?.models) && Array.isArray(saved.draft?.routes) && saved.snapshot && Array.isArray(saved.snapshot.models) && Array.isArray(saved.snapshot.connections)) {
+        if (state.connection?.configured === false && saved?.snapshot?.models?.length) {
+          sessionStorage.removeItem(storageKey); this.notice = '请先连接服务端，再配置授权模型。';
+        } else if (saved?.base && Array.isArray(saved.draft?.models) && Array.isArray(saved.draft?.routes) && saved.snapshot && Array.isArray(saved.snapshot.models) && Array.isArray(saved.snapshot.connections)) {
           this.snapshot = saved.snapshot; this.base = saved.base; this.draft = saved.draft; for (const key of ['view', 'filter', 'search', 'open']) if (saved.ui?.[key] !== undefined) this[key] = saved.ui[key]; this.notice = '已恢复此标签页未保存的修改。';
+          this.acceptCatalog(state);
         } else if (saved) this.notice = '目录已更新，已载入当前设置。';
       } catch { this.notice = '无法恢复上次草稿，已载入当前设置。'; }
     }
     try { this.widths = JSON.parse(sessionStorage.getItem('model-dock-demo-columns') || '{}'); } catch { this.widths = {}; }
+  }
+  acceptCatalog(state) {
+    const next = config(state), additions = next.models.filter(model => !this.base.models.some(row => row.id === model.id));
+    // Only metadata and new disabled models may advance a draft's revision.
+    // Concurrent edits to saved application preferences still require review.
+    const unchanged = this.snapshot.settingsRevision === state.settingsRevision && same(this.base.routes, next.routes)
+      && this.base.models.every(model => same(model, next.models.find(row => row.id === model.id)))
+      && additions.every(model => !model.enabled && !model.reasoningPolicy && !Object.keys(model.groupPolicies).length);
+    this.snapshot = { ...state, revision: unchanged ? state.revision : this.snapshot.revision, settingsRevision: unchanged ? state.settingsRevision : this.snapshot.settingsRevision };
+    this.base.models.push(...clone(additions)); this.draft.models.push(...clone(additions));
+    if (unchanged) this.base = next;
+    this.remember();
   }
   get dirtyCount() {
     if (!this.base || !this.draft) return 0;
@@ -67,7 +83,7 @@ export class ModelManager {
   }
   remember() {
     try {
-      if (this.dirtyCount) sessionStorage.setItem(storageKey, JSON.stringify({ revision: this.snapshot.revision, snapshot: { revision: this.snapshot.revision, models: this.snapshot.models, connections: this.snapshot.connections }, base: this.base, draft: this.draft, ui: { view: this.view, filter: this.filter, search: this.search, open: this.open } }));
+      if (this.dirtyCount) sessionStorage.setItem(storageKey, JSON.stringify({ revision: this.snapshot.revision, snapshot: { revision: this.snapshot.revision, settingsRevision: this.snapshot.settingsRevision, models: this.snapshot.models, connections: this.snapshot.connections }, base: this.base, draft: this.draft, ui: { view: this.view, filter: this.filter, search: this.search, open: this.open } }));
       else sessionStorage.removeItem(storageKey);
     } catch { this.error = '草稿暂存失败，请保留当前页面并保存修改。'; }
   }
@@ -132,7 +148,7 @@ export class ModelManager {
     const conflict = dirty && this.latest.revision !== this.snapshot.revision;
     this.root.innerHTML = `<section class="cm-manager" aria-label="应用功能与模型管理" aria-busy="${this.busy}">
       <div class="cm-toolbar"><div class="cm-filters" role="group" aria-label="模型类型筛选">${[['all', '全部'], ['text', '文本与理解']].map(([key, label]) => `<button data-mm="filter" data-value="${key}" aria-pressed="${this.filter === key}">${label}</button>`).join('')}</div><div class="cm-actions"><div class="cm-segment" role="group" aria-label="管理视图"><button data-mm="view" data-value="connections" data-model-view="connections" aria-pressed="${this.view === 'connections'}">按凭证</button><button data-mm="view" data-value="functions" data-model-view="functions" aria-pressed="${this.view === 'functions'}">按功能</button></div><span class="cm-count">已启用 ${enabled} / ${this.draft.models.length}</span><button class="cm-save ${dirty ? 'primary' : ''}" data-mm="save" ${!dirty || this.busy ? 'disabled' : ''}>${this.busy ? '处理中…' : dirty ? `保存更改 · ${dirty}` : '已保存'}</button></div></div>
-      <div class="cm-secondary"><input id="model-search" data-focus="model-search" type="search" aria-label="搜索模型、凭证或功能" placeholder="搜索模型、凭证或功能…" value="${esc(this.search)}"><div class="cm-actions"><button class="cm-text" data-action="connection">管理连接与凭证</button><button class="cm-text" data-mm="revert" ${!dirty || this.busy ? 'disabled' : ''}>撤销更改</button><button class="cm-text" data-mm="refresh" ${this.busy ? 'disabled' : ''}>${dirty ? '更新目录（保留修改）' : '刷新目录'}</button><button class="cm-text" data-action="add-route" ${this.busy ? 'disabled' : ''}>＋ 添加功能</button></div></div>
+      <div class="cm-secondary"><input id="model-search" data-focus="model-search" type="search" aria-label="搜索模型、凭证或功能" placeholder="搜索模型、凭证或功能…" value="${esc(this.search)}"><div class="cm-actions"><button class="cm-text" data-mm="revert" ${!dirty || this.busy ? 'disabled' : ''}>撤销更改</button><button class="cm-text" data-mm="refresh" ${this.busy || this.latest.connection?.configured === false ? 'disabled' : ''}>${this.busy ? '处理中…' : '刷新模型'}</button><button class="cm-text" data-action="add-route" ${this.busy ? 'disabled' : ''}>＋ 添加功能</button></div></div>
       ${this.error ? `<div class="cm-feedback error" role="alert">${esc(this.error)}</div>` : ''}${conflict ? '<div class="cm-feedback" role="status">目录或设置已在其他页面更新。未保存修改已保留；请撤销更改后重新编辑。</div>' : ''}${this.notice ? `<div class="cm-feedback" role="status">${esc(this.notice)}</div>` : ''}
       <div id="model-list"></div></section>`;
     this.renderTable();
@@ -463,11 +479,11 @@ export class ModelManager {
       this.busy = true; this.error = ''; this.render();
       try {
         let next = await this.api('/api/state');
-        // A metadata refresh is explicit. Never discard or silently rebase a draft.
-        if (!this.dirtyCount && mm !== 'revert') {
+        // Always request current server metadata, including with a local draft.
+        if (mm !== 'revert') {
           next = (await this.api('/api/refresh', { method: 'POST', body: { revision: next.revision } })).state;
         }
-        this.accept(next, mm === 'revert'); this.onState(next); this.remember(); this.notice = mm === 'revert' ? '已撤销更改，载入最新设置。' : this.dirtyCount ? '已检查最新目录，当前草稿已保留。' : '目录已更新，新发现的模型默认关闭。';
+        this.accept(next, mm === 'revert'); this.onState(next); this.remember(); this.notice = mm === 'revert' ? '已撤销更改，载入最新设置。' : this.dirtyCount ? '模型与能力已更新，未保存的修改已保留。' : '模型与能力已更新，新授权模型默认关闭。';
       } catch (error) { this.error = error.message; try { const next = await this.api('/api/state'); this.accept(next); this.onState(next); } catch {} }
       finally { this.busy = false; this.render(); }
     }

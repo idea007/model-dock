@@ -1,3 +1,6 @@
+import { imageInfo } from './image-data.mjs';
+import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes } from './image-options.mjs';
+
 export const VERSION = '0.1.0';
 export const SCHEMA_VERSION = 2;
 export class GatewayError extends Error {
@@ -24,6 +27,49 @@ export function slug(value, name = 'alias') {
   const result = string(value, name, 80);
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(result)) fail(`${name} must contain only letters, digits, dots, hyphens or underscores.`);
   return result;
+}
+export function validateImageGeneration(body) {
+  exact(body, ['model', 'prompt', 'n', 'response_format', 'aspect_ratio', 'reference_images', 'background']);
+  const model = string(body.model, 'model', 512);
+  if (typeof body.prompt !== 'string' || !body.prompt.trim() || body.prompt.length > 4000
+    || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/u.test(body.prompt)) {
+    fail('Use a non-empty image prompt of at most 4000 characters.', 'invalid_request', 'prompt');
+  }
+  if (body.n !== undefined && body.n !== 1) fail('This endpoint generates one image per request.', 'unsupported_parameter', 'n');
+  if (body.response_format !== undefined && body.response_format !== 'b64_json') {
+    fail('Use response_format b64_json.', 'unsupported_parameter', 'response_format');
+  }
+  if (body.aspect_ratio !== undefined && !imageAspectRatios.includes(body.aspect_ratio)) {
+    fail(`Choose an aspect_ratio from ${imageAspectRatios.join(', ')}.`, 'invalid_request', 'aspect_ratio');
+  }
+  if (body.background !== undefined && !['auto', 'transparent'].includes(body.background)) {
+    fail('Choose background auto or transparent.', 'invalid_request', 'background');
+  }
+  if (body.reference_images !== undefined && (!Array.isArray(body.reference_images) || body.reference_images.length > maxImageReferences)) {
+    fail(`reference_images must be an array of up to ${maxImageReferences} images.`, 'invalid_image_reference', 'reference_images');
+  }
+  return { model, prompt: body.prompt.trim(), aspectRatio: body.aspect_ratio, background: body.background };
+}
+export function decodeImageReferences(references = []) {
+  let total = 0;
+  return references.map((value, index) => {
+    const param = `reference_images[${index}]`;
+    const invalid = () => fail('Use a Base64 data URL with matching PNG, JPEG or WebP image data.', 'invalid_image_reference', param);
+    const tooLarge = () => { throw new GatewayError('A reference image exceeds 30 MiB.', 413, 'image_reference_too_large', param); };
+    const header = typeof value === 'string' && /^data:image\/(png|jpeg|webp);base64,/i.exec(value);
+    if (!header) invalid();
+    const encoded = value.slice(header[0].length);
+    if (encoded.length > Math.ceil(maxImageReferenceBytes / 3) * 4) tooLarge();
+    if (encoded.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(encoded)) invalid();
+    const size = Buffer.byteLength(encoded, 'base64');
+    if (size > maxImageReferenceBytes) tooLarge();
+    total += size;
+    if (total > maxImageReferenceTotalBytes) throw new GatewayError('Reference images exceed 50 MiB in total.', 413, 'image_reference_too_large', 'reference_images');
+    const bytes = Buffer.from(encoded, 'base64');
+    const info = imageInfo(bytes);
+    if (info?.format !== header[1].toLowerCase()) invalid();
+    return { bytes, format: info.format };
+  });
 }
 export const PARAMS = ['model', 'messages', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'stop', 'seed', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'reasoning_effort', 'user'];
 export function validateChat(body) {

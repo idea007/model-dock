@@ -11,9 +11,11 @@
 - Search covers sources, models, function IDs/names, and group names. Filtering never removes hidden rows from the saved draft.
 - Drag a column separator, double-click to reset, or focus it and use arrow keys (`Shift` for larger steps; `Home` to reset). Widths are remembered per view in the browser tab.
 
-Changes remain in a tab-local draft until **Save changes** (`保存更改`). Navigation between views and reloading the same authenticated tab preserve the draft. Logging out clears it. **Revert changes** (`撤销更改`) loads current settings. A conflicting revision rejects the entire save and preserves the draft; it does not silently merge or overwrite another tab's work.
+Changes remain in a tab-local draft until **Save changes** (`保存更改`). Navigation between pages or views and reloading the same tab preserve the draft. **Revert changes** (`撤销更改`) loads current settings. A conflicting revision rejects the entire save and preserves the draft; it does not silently merge or overwrite another tab's work.
 
-Refreshing a clean view reads `GET /v1/models` through the project key. Newly authorized models are disabled in the app until explicitly enabled. Missing models and their saved selections remain visible as unavailable. A refresh with a dirty draft checks the latest app revision without replacing that draft; save or revert before refreshing the gateway catalog.
+**Refresh models** (`刷新模型`) always reads `GET /v1/models` through the project key, including with an unsaved draft. Reopening the page also updates publication status, capabilities and reasoning levels. Newly authorized models remain disabled until explicitly enabled. Missing models and their saved selections remain visible as unavailable.
+
+A metadata refresh preserves local edits and advances the draft revision only if saved application preferences have not changed in another page. Concurrent preference changes still produce a revision conflict, while updated capabilities and availability remain visible. The dedicated **Connection settings** page also provides a refresh button, available authorized model count and last successful sync time.
 
 ## Standalone and grouped functions
 

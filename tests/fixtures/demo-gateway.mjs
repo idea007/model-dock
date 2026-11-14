@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { startGateway } from '../gateway/server.mjs';
+import { startGateway } from '../../apps/gateway/server.mjs';
 
 // Isolated, deterministic providers. Never read personal gateway credentials or call upstreams.
 export async function startMockGateway() {

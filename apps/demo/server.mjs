@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { once } from 'node:events';
 import { DemoStore } from './store.mjs';
 import { assertLoopbackRequest } from '../../packages/protocol/loopback.mjs';
@@ -20,13 +20,15 @@ function connection(input) {
   exact(input, ['revision', 'baseUrl', 'apiKey']);
   let url; try { url = new URL(input.baseUrl); } catch { throw new GatewayError('请输入有效的 Model Dock API 地址。'); }
   if (url.username || url.password || url.search || url.hash || !(url.protocol === 'https:' || url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))) throw new GatewayError('远端网关需要 HTTPS，本机可使用 HTTP。');
-  if (typeof input.apiKey !== 'string' || !/^md_key_[A-Za-z0-9_-]+$/.test(input.apiKey) || input.apiKey.length > 1000) throw new GatewayError('请使用 Model Dock 的项目密钥（md_key_），不要使用管理员令牌。');
-  return { baseUrl: url.toString().replace(/\/+$/, ''), apiKey: input.apiKey, mock: false };
+  const apiKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
+  if (!/^md_key_[A-Za-z0-9_-]+$/.test(apiKey) || apiKey.length > 1000) throw new GatewayError('请使用 Model Dock 的项目密钥（md_key_），不要使用管理员令牌。');
+  return { baseUrl: url.toString().replace(/\/+$/, ''), apiKey };
 }
 function normalizeCatalog(data) {
   if (!Array.isArray(data?.data)) throw new GatewayError('网关返回了无效的模型目录。', 502, 'invalid_catalog');
   const seen = new Set();
-  return data.data.filter(row => row && typeof row === 'object').filter(row => !row.legacy_alias).slice(0, 1000).map(row => {
+  return data.data.filter(row => row && typeof row === 'object' && !row.legacy_alias
+    && !(row.capabilities?.image_generation === true && row.capabilities.text === false)).slice(0, 1000).map(row => {
     if (typeof row.id !== 'string' || !row.id || row.id.length > 512 || seen.has(row.id) || typeof row.source?.id !== 'string' || !row.source.id || row.source.id.length > 100) throw new GatewayError('此网关尚未提供接入端所需的模型元数据。', 502, 'invalid_catalog');
     seen.add(row.id);
     return { id: row.id, nativeId: row.id.split('/').slice(1).join('/') || row.id, name: typeof row.name === 'string' ? row.name.slice(0, 300) : row.id, connectionId: row.source.id,
@@ -46,29 +48,27 @@ function mergeCatalog(state, catalog) {
   const ids = new Set(catalog.map(row => row.id));
   state.catalog = [...catalog, ...state.catalog.filter(row => !ids.has(row.id)).map(row => ({ ...row, available: false }))];
   for (const model of catalog) if (!state.models.some(row => row.id === model.id)) state.models.push({ id: model.id, enabled: false, reasoningPolicy: null, groupPolicies: {} });
-  state.catalogError = '';
+  state.catalogError = ''; state.catalogUpdatedAt = new Date().toISOString();
 }
 export function demoSnapshot(state) {
   const sources = [...new Map(state.catalog.map(model => [model.source.id, model.source])).values()];
-  return { revision: state.revision, version: '0.1.0', mode: state.connection?.mock ? 'mock' : 'gateway', connection: { baseUrl: state.connection?.baseUrl || 'http://127.0.0.1:4317/v1', configured: Boolean(state.connection), error: state.catalogError },
+  return { revision: state.revision, settingsRevision: state.settingsRevision || 0, version: '0.1.0', mode: 'gateway', connection: { baseUrl: state.connection?.baseUrl || 'http://127.0.0.1:4317/v1', configured: Boolean(state.connection), error: state.catalogError, refreshedAt: state.catalogUpdatedAt || null },
     connections: sources.map(source => ({ ...source, enabled: Boolean(state.connection) && !state.catalogError, status: state.catalogError ? 'error' : 'connected' })),
     models: state.catalog.map(model => ({ ...model, ...state.models.find(row => row.id === model.id), available: model.available && !state.catalogError })), routes: state.routes };
 }
-export async function startDemo({ directory: dataDirectory, port = 4318, mockConnection } = {}) {
+export async function startDemo({ directory: dataDirectory, port = 4318 } = {}) {
   const store = await new DemoStore(dataDirectory).open();
+  const browserSession = `demo_session_${randomBytes(32).toString('base64url')}`;
   const controllers = new Set(); let origin, closing;
   try {
-    if (mockConnection) {
-      const catalog = await fetchCatalog(mockConnection, new AbortController().signal);
+    // Retired simulated connections must not appear as real authorized models.
+    if (store.read().connection?.mock) {
       await store.mutate(store.read().revision, state => {
-        const fresh = !state.connection; state.connection = { ...mockConnection, mock: true }; mergeCatalog(state, catalog);
-        if (fresh) {
-          state.models.forEach(model => { model.enabled = true; });
-          state.routes.forEach(feature => { const ids = catalog.filter(model => feature.kind !== 'extract' || model.capabilities.structured !== false).map(model => model.id); feature.allowedModelIds = feature.selection === 'single' ? ids.slice(0, 1) : ids; feature.modelId = ids[0] || ''; });
-        }
+        state.connection = null; state.catalog = []; state.models = []; state.catalogError = ''; state.catalogUpdatedAt = null;
+        state.routes.forEach(feature => { feature.allowedModelIds = []; feature.modelId = ''; feature.reasoningOverrides = {}; });
       });
     }
-    if (!mockConnection && store.read().connection) {
+    if (store.read().connection) {
       const state = store.read();
       try { const catalog = await fetchCatalog(state.connection, new AbortController().signal); await store.mutate(state.revision, next => mergeCatalog(next, catalog)); }
       catch { await store.mutate(state.revision, next => { next.catalogError = '启动时无法读取授权目录，请检查网关并刷新目录。'; }); }
@@ -84,8 +84,15 @@ export async function startDemo({ directory: dataDirectory, port = 4318, mockCon
         if (request.method === 'GET' && pathname === '/favicon.ico') { response.writeHead(204, { 'cache-control': 'no-store' }); response.end(); return; }
         if (request.method === 'GET' && pathname === '/healthz') { json(response, 200, { ok: true, role: 'client-demo' }); return; }
         if (request.method === 'GET' && files.has(pathname)) { const [file, type] = files.get(pathname); response.writeHead(200, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'no-store' }); response.end(await fs.readFile(path.join(directory, file))); return; }
+        if (request.method === 'POST' && pathname === '/api/session') {
+          // The custom header requires CORS preflight from another origin. Only
+          // our own page may bootstrap; no credentials are embedded in assets.
+          const site = request.headers['sec-fetch-site'];
+          if (request.headers['x-model-dock-client'] !== '1' || site && site !== 'same-origin') throw new GatewayError('请从接入端页面建立本地会话。', 403, 'origin_forbidden');
+          json(response, 200, { session: browserSession }); return;
+        }
         const token = String(request.headers.authorization || '').replace(/^Bearer /, '');
-        if (!timingSafeEqual(hash(token), hash(store.accessToken))) throw new GatewayError('请使用 demo 启动时打开的本地会话。', 401, 'unauthorized');
+        if (!timingSafeEqual(hash(token), hash(browserSession)) && !timingSafeEqual(hash(token), hash(store.accessToken))) throw new GatewayError('接入端会话已失效，请刷新页面重试。', 401, 'local_session_required');
         if (request.method === 'GET' && pathname === '/api/state') { json(response, 200, demoSnapshot(store.read())); return; }
         if (request.method !== 'POST' || !['/api/connection', '/api/settings', '/api/refresh', '/api/run'].includes(pathname)) throw new GatewayError('Endpoint not found.', 404, 'not_found');
         if (!String(request.headers['content-type'] || '').startsWith('application/json')) throw new GatewayError('Use application/json.', 415, 'unsupported_media_type');
@@ -97,10 +104,10 @@ export async function startDemo({ directory: dataDirectory, port = 4318, mockCon
           await store.mutate(body.revision, state => {
             // Credential changes never silently reactivate choices for another project.
             const changed = state.connection?.baseUrl !== nextConnection.baseUrl || state.connection?.apiKey !== nextConnection.apiKey;
-            if (changed) state.models.forEach(model => { model.enabled = false; });
+            if (changed) { state.models.forEach(model => { model.enabled = false; }); state.settingsRevision = state.revision + 1; }
             state.connection = nextConnection; mergeCatalog(state, catalog);
           });
-        } else if (pathname === '/api/settings') await store.mutate(body.revision, state => validateSettings(state, body));
+        } else if (pathname === '/api/settings') await store.mutate(body.revision, state => { validateSettings(state, body); state.settingsRevision = state.revision + 1; });
         else if (pathname === '/api/refresh') {
           exact(body, ['revision']); const before = store.read();
           if (!before.connection) throw new GatewayError('请先连接 Model Dock。');

@@ -2,9 +2,61 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { JSDOM } from 'jsdom';
 import { GatewayError } from '../packages/protocol/index.mjs';
 import { setup, fixtureUpstream, until } from './helpers.mjs';
+
+test('console links are single-use and authorize only an issued session', async t => {
+  const app = await setup(t);
+  const issue = '/admin/console-links';
+  const sessionPath = '/console/session';
+  const state = '/admin/state';
+  const anon = '';
+  const { data: credentials } = await app.mutate('/admin/keys', 'POST', { name: 'Console scope test', models: ['*'] });
+  assert.equal((await app.request(issue, 'POST', undefined, anon)).status, 401);
+  assert.equal((await app.request(issue, 'POST', undefined, credentials.token)).status, 401);
+
+  const cli = fileURLToPath(new URL('../apps/gateway/cli.mjs', import.meta.url));
+  const { stdout } = await promisify(execFile)(process.execPath, [cli, 'open', '--port', new URL(app.origin).port, '--print'], {
+    env: { ...process.env, MODEL_DOCK_HOME: app.directory }
+  });
+  const url = new URL(stdout.trim());
+  const code = new URLSearchParams(url.hash.slice(1)).get('session');
+  assert.equal(url.origin, app.origin);
+  assert.ok(code?.startsWith('md_console_link_'));
+  assert.equal((await app.request(state, 'GET', undefined, code)).status, 401);
+  assert.equal((await app.request(sessionPath, 'POST', { code }, anon, { origin: 'http://localhost' })).status, 403);
+
+  const { status, data } = await app.request(sessionPath, 'POST', { code }, anon);
+  assert.equal(status, 200);
+  const session = data.session;
+  assert.equal((await app.request(sessionPath, 'POST', { code }, anon)).status, 401);
+  assert.equal((await app.request(state, 'GET', undefined, session)).status, 200);
+  assert.equal((await app.request('/v1/models', 'GET', undefined, session)).status, 200);
+  assert.equal((await app.request(issue, 'POST', undefined, session)).status, 401);
+
+  const secondLink = new URL(app.consoleLink());
+  const secondCode = new URLSearchParams(secondLink.hash.slice(1)).get('session');
+  assert.equal((await app.request(sessionPath, 'POST', { code: secondCode }, session)).data.session, session);
+  assert.equal((await app.request(sessionPath, 'DELETE', undefined, session)).status, 200);
+  assert.equal((await app.request(state, 'GET', undefined, session)).status, 401);
+  assert.equal((await app.request(state)).status, 200);
+
+  const now = Date.now();
+  const expiringLink = new URL(app.consoleLink());
+  const expiringCode = new URLSearchParams(expiringLink.hash.slice(1)).get('session');
+  const clock = t.mock.method(Date, 'now', () => now + 6 * 60_000);
+  assert.equal((await app.request(sessionPath, 'POST', { code: expiringCode }, anon)).status, 401);
+  const freshLink = new URL(app.consoleLink());
+  const freshCode = new URLSearchParams(freshLink.hash.slice(1)).get('session');
+  const freshSession = (await app.request(sessionPath, 'POST', { code: freshCode }, anon)).data.session;
+  assert.ok(freshSession);
+  clock.mock.mockImplementation(() => now + 8 * 24 * 60 * 60_000);
+  assert.equal((await app.request(state, 'GET', undefined, freshSession)).status, 401);
+});
 
 test('console: login, connection discovery, model publication, scoped key and JSON/SSE playground', async t => {
   const upstream = await fixtureUpstream(t, [{
@@ -17,8 +69,9 @@ test('console: login, connection discovery, model publication, scoped key and JS
   win.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   win.HTMLDialogElement.prototype.close = function () { this.open = false; queueMicrotask(() => this.dispatchEvent(new win.Event('close'))); };
   const descriptors = new Map(), nativeFetch = globalThis.fetch;
-  const globals = { window: win, document, location: win.location, history: win.history, sessionStorage: win.sessionStorage,
-    FormData: win.FormData, navigator: { clipboard: { writeText: async () => {} } },
+  let clipboard;
+  const globals = { window: win, document, location: win.location, history: win.history, sessionStorage: win.sessionStorage, localStorage: win.localStorage,
+    FormData: win.FormData, navigator: { clipboard: { writeText: async text => { clipboard = text; } } },
     fetch: (url, options) => nativeFetch(new URL(url, app.origin), options) };
   for (const [key, value] of Object.entries(globals)) { descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { value, configurable: true, writable: true }); }
   let module;
@@ -26,7 +79,9 @@ test('console: login, connection discovery, model publication, scoped key and JS
     module?.dispose(); dom.window.close();
     for (const [key, descriptor] of descriptors) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
   });
-  const source = (await fs.readFile(new URL('../apps/console/app.mjs', import.meta.url), 'utf8')).replace("'./events.mjs'", JSON.stringify(new URL('../packages/protocol/events.mjs', import.meta.url).href));
+  const source = (await fs.readFile(new URL('../apps/console/app.mjs', import.meta.url), 'utf8'))
+    .replace("'./events.mjs'", JSON.stringify(new URL('../packages/protocol/events.mjs', import.meta.url).href))
+    .replace("'./image-options.mjs'", JSON.stringify(new URL('../packages/protocol/image-options.mjs', import.meta.url).href));
   module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
   const click = selector => { const element = document.querySelector(selector); assert.ok(element, selector); element.click(); };
   const fill = (name, value) => { const field = document.querySelector(`[name="${name}"]`); assert.ok(field, name); field.value = value; };
@@ -35,18 +90,28 @@ test('console: login, connection discovery, model publication, scoped key and JS
     form.dispatchEvent(new win.SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: form.querySelector('button[type=submit],button.primary') }));
   };
   const modalDone = () => until(() => !document.querySelector('#dialog').open);
+  const providerGroup = type => `[aria-labelledby="provider-${type}-heading"]`;
+  const directAdd = type => `${providerGroup(type)} .provider-actions > [data-action="add-connection"]`;
+  const connectionNames = type => [...document.querySelectorAll(`${providerGroup(type)} .connection-card h4`)].map(heading => heading.textContent);
   fill('token', 'incorrect'); submit('#login-form');
   await until(() => document.querySelector('#login-form .form-error')?.textContent.includes('valid access token'));
   fill('token', app.admin); submit('#login-form');
   await until(() => document.querySelector('.shell'));
-  assert.match(document.querySelector('h1').textContent, /模型服务/);
+  assert.equal(document.querySelector('h1').textContent, '连接与凭证');
+  assert.ok(document.querySelector('.page > section').classList.contains('connections-endpoint'));
+  assert.equal(document.querySelector('.stats'), null);
+  assert.deepEqual([...document.querySelectorAll('.provider-group h3')].map(heading => heading.textContent), ['模型 API', 'Ollama', 'Codex']);
+  assert.equal(document.querySelectorAll('.provider-empty').length, 3);
+  for (const type of ['openai', 'ollama', 'codex']) assert.ok(document.querySelector(directAdd(type)));
+  click('.connections-endpoint [data-action="copy-endpoint"]');
+  assert.equal(clipboard, `${app.origin}/v1`);
   click('[data-action="add-connection"][data-type="openai"]');
   fill('name', '测试 API'); fill('baseUrl', `${upstream.origin}/v1`); fill('apiKey', 'fixture-upstream'); submit('#modal-form');
   await modalDone();
-  assert.match(document.querySelector('.connection-card').textContent, /测试 API/);
+  assert.deepEqual(connectionNames('openai'), ['测试 API']);
   click('.connection-card [data-action="discover"]');
   await until(() => app.store.read().models.length === 3 && !document.querySelector('.connection-card [data-action="discover"]').disabled);
-  click('[data-view="models"]');
+  click('.section-header [data-view="models"]');
   assert.match(document.querySelector('h1').textContent, /模型与服务/);
   assert.equal(document.querySelectorAll('.catalog-group').length, 1);
   const categoryButtons = () => [...document.querySelectorAll('.catalog-filters button')];
@@ -143,4 +208,47 @@ test('console: login, connection discovery, model publication, scoped key and JS
   assert.match(document.querySelector('.catalog-runtime').textContent, /API 最近调用失败/);
   click(check);
   await until(() => document.querySelector('.catalog-runtime')?.dataset.status === 'connected');
+
+  const storedConnections = [
+    { type: 'ollama', name: '测试 Ollama', enabled: false },
+    { type: 'codex', name: '测试 Codex' },
+    { type: 'openai', name: '第二个 API', baseUrl: `${upstream.origin}/v1` }
+  ];
+  for (const connection of storedConnections) {
+    const result = await app.mutate('/admin/connections', 'POST', connection);
+    assert.equal(result.status, 200);
+  }
+  click('[data-view="connections"]'); click('[data-action="refresh"]');
+  await until(() => connectionNames('codex').length === 1);
+  assert.deepEqual(connectionNames('openai'), ['测试 API', '第二个 API']);
+  assert.deepEqual(connectionNames('ollama'), ['测试 Ollama']);
+  assert.deepEqual(connectionNames('codex'), ['测试 Codex']);
+  assert.match(document.querySelector(`${providerGroup('ollama')} .connection-card`).textContent, /已停用/);
+  assert.ok(document.querySelector(directAdd('openai')));
+  assert.equal(document.querySelector(directAdd('ollama')), null);
+  assert.equal(document.querySelector(`${providerGroup('codex')} [data-action="add-connection"]`), null);
+
+  const ollamaMore = `${providerGroup('ollama')} .provider-more`;
+  assert.equal(document.querySelector(ollamaMore).open, false);
+  click(`${ollamaMore} summary`);
+  assert.equal(document.querySelector(ollamaMore).open, true);
+  assert.match(document.querySelector(`${ollamaMore} button`).textContent, /添加其他实例/);
+  click(`${ollamaMore} button`);
+  assert.equal(document.querySelector(ollamaMore).open, false);
+  assert.match(document.querySelector('#dialog-title').textContent, /添加 Ollama/);
+  fill('name', '另一个 Ollama'); fill('baseUrl', 'http://127.0.0.1:11435'); submit('#modal-form');
+  await modalDone();
+  assert.deepEqual(connectionNames('ollama'), ['测试 Ollama', '另一个 Ollama']);
+
+  for (const type of ['ollama', 'codex']) {
+    const connections = app.store.read().connections.filter(connection => connection.type === type);
+    for (const connection of connections) {
+      click(`${providerGroup(type)} [data-action="delete-connection"][data-id="${connection.id}"]`);
+      submit('#modal-form');
+      await modalDone();
+    }
+    assert.deepEqual(connectionNames(type), []);
+    assert.ok(document.querySelector(directAdd(type)));
+    assert.equal(document.querySelector(`${providerGroup(type)} .provider-more`), null);
+  }
 });

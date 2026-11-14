@@ -72,7 +72,7 @@ body.cm-resizing, body.cm-resizing * { cursor: col-resize!important; user-select
 .cm-association:hover, .cm-feature-model:hover { background: #fafafa; }
 .cm-children, .cm-child-function { background: #f7f7f8; }
 .cm-children .cm-feature-cell { padding-left: 60px; }
-.cm-standalone { padding-left: 48px; }
+.cm-feature-cell.cm-standalone { padding-left: 48px; }
 .cm-children .cm-effort-cell { padding-left: 28px; }
 .cm-effort-cell, .cm-feature-cell { padding: 8px 12px; min-width: 0; }
 .cm-feature-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; }
