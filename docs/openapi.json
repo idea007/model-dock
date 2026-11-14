@@ -173,6 +173,32 @@
                     ] }]
                   }
                 },
+                "function": {
+                  "summary": "Request up to one application function",
+                  "value": {
+                    "model": "connection-id/tool-model",
+                    "messages": [{ "role": "user", "content": "Use the add function to calculate 17 + 25." }],
+                    "tools": [{ "type": "function", "function": {
+                      "name": "add",
+                      "parameters": { "type": "object", "properties": { "a": { "type": "number" }, "b": { "type": "number" } }, "required": ["a", "b"], "additionalProperties": false }
+                    } }],
+                    "tool_choice": "auto",
+                    "parallel_tool_calls": false,
+                    "stream": true,
+                    "stream_options": { "include_usage": true }
+                  }
+                },
+                "functionOutput": {
+                  "summary": "Replay the assistant call and its result",
+                  "value": {
+                    "model": "connection-id/tool-model",
+                    "messages": [
+                      { "role": "user", "content": "Use the add function to calculate 17 + 25." },
+                      { "role": "assistant", "content": null, "tool_calls": [{ "id": "call_example", "type": "function", "function": { "name": "add", "arguments": "{\"a\":17,\"b\":25}" } }] },
+                      { "role": "tool", "tool_call_id": "call_example", "content": "{\"result\":42}" }
+                    ]
+                  }
+                },
                 "structured": {
                   "summary": "Request a JSON object",
                   "value": {
@@ -381,23 +407,29 @@
                   }
                 },
                 "function": {
-                  "summary": "Request an application function",
+                  "summary": "Request up to one application function over SSE",
                   "value": {
-                    "model": "connection-id/model-id",
-                    "input": "Check the weather in Hangzhou.",
-                    "tools": [{ "type": "function", "name": "weather", "strict": false, "parameters": { "type": "object", "properties": { "city": { "type": "string" } } } }],
-                    "tool_choice": { "type": "function", "name": "weather" }
+                    "model": "connection-id/tool-model",
+                    "input": [{ "role": "user", "content": "Use the add function to calculate 17 + 25." }],
+                    "tools": [{ "type": "function", "name": "add",
+                      "parameters": { "type": "object", "properties": { "a": { "type": "number" }, "b": { "type": "number" } }, "required": ["a", "b"], "additionalProperties": false }
+                    }],
+                    "tool_choice": "auto",
+                    "parallel_tool_calls": false,
+                    "stream": true,
+                    "store": false
                   }
                 },
                 "functionOutput": {
-                  "summary": "Continue with a function result",
+                  "summary": "Replay the function call and its result",
                   "value": {
-                    "model": "connection-id/model-id",
+                    "model": "connection-id/tool-model",
                     "input": [
-                      { "role": "user", "content": "Check the weather in Hangzhou." },
-                      { "type": "function_call", "id": "fc_example", "call_id": "call_example", "name": "weather", "arguments": "{\"city\":\"Hangzhou\"}", "status": "completed" },
-                      { "type": "function_call_output", "call_id": "call_example", "output": "22 degrees Celsius." }
-                    ]
+                      { "role": "user", "content": "Use the add function to calculate 17 + 25." },
+                      { "type": "function_call", "id": "fc_example", "call_id": "call_example", "name": "add", "arguments": "{\"a\":17,\"b\":25}", "status": "completed" },
+                      { "type": "function_call_output", "call_id": "call_example", "output": "{\"result\":42}" }
+                    ],
+                    "store": false
                   }
                 }
               }
@@ -1142,7 +1174,7 @@
                 }
               }
             ],
-            "description": "Supply the selected function in tools. The required mode needs at least one function."
+            "description": "Ollama accepts auto and none. The required mode needs at least one function in tools. A named choice must match a function in tools."
           },
           "parallel_tool_calls": {
             "type": "boolean",
@@ -1849,7 +1881,7 @@
         "additionalProperties": false,
         "properties": {
           "type": { "const": "function" }, "name": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" },
-          "description": { "type": "string" }, "strict": { "type": ["boolean", "null"], "default": false, "description": "Omission or null selects false. An explicit true depends on the upstream and is rejected by Codex." },
+          "description": { "type": "string" }, "strict": { "type": ["boolean", "null"], "default": false, "description": "Omission or null selects false. An explicit true requires support from the OpenAI-compatible upstream." },
           "parameters": { "type": "object", "required": ["type"], "properties": { "type": { "const": "object" } } }
         }
       },
@@ -1883,7 +1915,8 @@
         "additionalProperties": false,
         "properties": {
           "type": { "const": "function_call_output" }, "id": { "type": "string" }, "status": { "const": "completed" },
-          "call_id": { "type": "string", "minLength": 1, "maxLength": 200 }, "output": { "type": "string" }
+          "call_id": { "type": "string", "minLength": 1, "maxLength": 200, "description": "Matches the call_id of the completed function_call in the replayed input." },
+          "output": { "type": "string", "description": "Tool result as plain text or serialized JSON." }
         }
       },
       "ResponsesOutputItem": {

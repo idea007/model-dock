@@ -63,7 +63,8 @@ export async function fixtureUpstream(t, models = [{ id: 'shared' }, { id: 'slow
     const toolName = value.tool_choice?.function?.name || value.tools?.[0]?.function?.name || 'weather';
     const toolCalls = [{ id: 'call_1', type: 'function', function: {
       name: prompt === 'invalid-tool-name' ? 'unregistered' : toolName,
-      arguments: ['invalid-tool-arguments', 'length-limit'].includes(prompt) ? '{"city":' : '{"city":"杭州"}'
+      arguments: ['invalid-tool-arguments', 'length-limit'].includes(prompt) ? '{"city":'
+        : toolName === 'add' ? '{"a":17,"b":25}' : '{"city":"杭州"}'
     } }];
     if (prompt === 'multiple-tool-calls') toolCalls.push({ ...toolCalls[0], id: 'call_2' });
     if (prompt === 'duplicate-tool-id') toolCalls.push({ ...toolCalls[0] });

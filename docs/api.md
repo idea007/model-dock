@@ -9,8 +9,8 @@ Download the [OpenAPI 3.1 specification](openapi.json) from the repository or fr
 | Method and path | Operation |
 | --- | --- |
 | `GET /v1/models` | List published models and legacy aliases visible to the supplied key |
-| `POST /v1/chat/completions` | Generate text from text or image input as JSON or SSE |
-| `POST /v1/responses` | Create a stateless text response from text or images as JSON or SSE |
+| `POST /v1/chat/completions` | Accept text or images and return text or function calls as JSON or SSE |
+| `POST /v1/responses` | Accept text or images and return a stateless response with up to one function call as JSON or SSE |
 | `POST /v1/images/generations` | Generate or edit one Codex image using a JSON body |
 
 ## Inference
@@ -25,7 +25,7 @@ See [authorized model metadata](#authorized-model-metadata) for capability field
 
 Send an exact model ID or an existing legacy alias and a `messages` array. Each message uses string `content` or a non-empty array of parts. Model Dock joins pure text arrays in order. A user message can mix `text` and `image_url` parts. Set `n: 1` or omit it. [Image input examples](#image-input)
 
-An assistant message carrying `tool_calls` can omit `content` or set it to `null`. An explicit refusal can also use `content: null`. To resume a tool turn, replay the assistant message with its calls, immediately followed by one `role: "tool"` result per call. Put the call's `id` in `tool_call_id` and send a text or serialized JSON result. Use `parallel_tool_calls: false` for a single call at most. Codex applies this limit on every turn.
+An assistant message carrying `tool_calls` or an explicit refusal can use `content: null`. For a tool call, `content` may also be omitted. [Function call and replay example](#function-calling)
 
 ```json
 {
@@ -84,26 +84,82 @@ if (terminal.status === 'incomplete') console.error(terminal.incomplete_details.
 
 Raw JSON puts text and refusals in the message items in `output`. The SDK derives `output_text` from those items. `usage` gives reported input, output and total token counts, or `null` when counts are unavailable. The gateway requests counts when streaming through the official OpenAI API. SSE includes `event:` names, increasing `sequence_number`, and stable item IDs and indexes. Read the final `response.completed`, `response.incomplete`, or `response.failed` event for the response snapshot. `incomplete_details.reason` gives `max_output_tokens` or `content_filter` when reported by the adapter. On failure after streaming starts, read `response.error`. A stream that ends without a terminal event has an unknown outcome.
 
-For functions, read the `function_call` item in a completed response and execute it in the calling app. With SSE, wait for `response.completed`. Each validated call emits `response.function_call_arguments.delta` with the full JSON argument string, followed by `response.function_call_arguments.done` and `response.output_item.done`. To continue, append the complete prior `output` and one `function_call_output` for the call. Use `call_id` to match the result and a string for `output`. An empty result can use an empty string.
+With SSE, each validated call emits `response.function_call_arguments.delta` with the full JSON argument string, followed by `response.function_call_arguments.done` and `response.output_item.done`. Wait for `response.completed` before executing the call. [Function call and replay example](#function-calling) · [OpenAI Responses API reference](https://developers.openai.com/api/reference/resources/responses/methods/create)
+
+### Function calling
+
+Choose a project-authorized model that supports tools. Check `data[].capabilities.tools` from `GET /v1/models`. A value of `null` means the gateway has no capability metadata, so verify support with the upstream.
+
+| | Chat Completions | Responses |
+| --- | --- | --- |
+| Function definition | `{ type: "function", function: { name, parameters } }` | `{ type: "function", name, parameters }` |
+| Complete call | `choices[0].message.tool_calls` with `finish_reason: "tool_calls"` | `output` item of type `function_call` in a completed response |
+| Replay | Original `messages`, the full assistant message, then one `role: "tool"` message per call. Match `tool_call_id` to the call's `id` | Original `input`, the full previous `output`, then a `function_call_output` item. Match `call_id` to the call's `call_id`. The item's `id` identifies it in SSE |
+
+The caller validates the function name and arguments, executes the function, and sends each result as a string. Plain text, serialized JSON and an empty string are valid results. Keep all completed pairs in order when replaying multiple turns.
+
+Use `tool_choice: "auto"` to let a model choose between text and a function, or `"none"` to suppress new calls. Ollama supports these two modes. OpenAI-compatible APIs and Codex also accept `"required"` and a named function. With `parallel_tool_calls: false`, at most one call is handed off per turn. Responses and Codex apply that limit every turn. OpenAI-compatible Chat may return multiple calls on a supporting model. [Provider compatibility](compatibility.md)
+
+The following examples use the same `sdk` and `model` as above. Both submit one local addition result and then request a final answer.
 
 ```js
-const tools = [{
-  type: 'function', name: 'weather', strict: false,
-  parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] }
-}];
-const history = [{ role: 'user', content: 'What is the weather in Hangzhou?' }];
-const turn = await sdk.responses.create({ model, input: history, tools, tool_choice: 'auto' });
-const call = turn.output.find(item => item.type === 'function_call');
-if (call) {
-  const result = await sdk.responses.create({ model, input: [
-    ...history, ...turn.output,
-    { type: 'function_call_output', call_id: call.call_id, output: '22 degrees Celsius.' }
-  ] });
-  console.log(result.output_text);
+const history = [{ role: 'user', content: 'Use the add function to calculate 17 + 25.' }];
+const add = {
+  name: 'add',
+  parameters: {
+    type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } },
+    required: ['a', 'b'], additionalProperties: false
+  }
+};
+const singleCall = { model, tool_choice: 'auto', parallel_tool_calls: false };
+
+function runAdd(name, args) {
+  const input = JSON.parse(args);
+  if (name !== add.name || !Number.isFinite(input?.a) || !Number.isFinite(input?.b) || Object.keys(input).length !== 2) {
+    throw new Error('Invalid add call.');
+  }
+  return JSON.stringify({ result: input.a + input.b });
 }
 ```
 
-See the [provider compatibility matrix](compatibility.md#responses) and the [OpenAI Responses API reference](https://developers.openai.com/api/reference/resources/responses/methods/create).
+#### Chat Completions round trip
+
+```js
+const chat = await sdk.chat.completions.create({
+  ...singleCall, messages: history, tools: [{ type: 'function', function: add }]
+});
+const choice = chat.choices[0];
+if (choice.finish_reason === 'tool_calls') {
+  const [call] = choice.message.tool_calls;
+  const final = await sdk.chat.completions.create({ model, messages: [
+    ...history, choice.message,
+    { role: 'tool', tool_call_id: call.id, content: runAdd(call.function.name, call.function.arguments) }
+  ] });
+  console.log(final.choices[0].message.content);
+} else {
+  console.log(choice.message.refusal ?? choice.message.content);
+}
+```
+
+#### Responses round trip
+
+```js
+const turn = await sdk.responses.create({
+  ...singleCall, input: history, store: false, tools: [{ type: 'function', ...add }]
+});
+if (turn.status === 'completed') {
+  const call = turn.output.find(item => item.type === 'function_call');
+  if (call) {
+    const final = await sdk.responses.create({ model, store: false, input: [
+      ...history, ...turn.output,
+      { type: 'function_call_output', call_id: call.call_id, output: runAdd(call.name, call.arguments) }
+    ] });
+    console.log(final.output_text);
+  } else {
+    console.log(turn.output_text);
+  }
+}
+```
 
 ### Image input
 
@@ -201,7 +257,8 @@ Record the gateway response header `x-request-id`. Include it, the HTTP status a
 | `429` | `connection_busy` | Gateway capacity was exhausted before provider submission. `Retry-After: 2` gives a delay in seconds |
 | `429` | `upstream_rate_limited`, `codex_rate_limited` | The request reached the provider. A valid HTTP upstream `Retry-After` is forwarded as seconds or a standard GMT HTTP date. If the header is absent, choose a backoff based on the provider's quota and your retry policy |
 | `499` | `request_cancelled` | The active request was cancelled. A client that disconnected cannot read this response |
-| `502` | `upstream_auth_failed`, `upstream_unreachable`, `upstream_protocol_error`, `upstream_json_invalid`, `upstream_tool_choice_failed`, `codex_protocol_error` | Check upstream credentials, availability and response behavior |
+| `502` | `upstream_auth_failed`, `upstream_unreachable`, `upstream_protocol_error`, `upstream_json_invalid`, `codex_protocol_error` | Check upstream credentials, availability and response behavior |
+| `502` | `upstream_tool_choice_failed`, `codex_tool_required`, `codex_tool_invalid` | Check that the model supports the requested choice and returned a valid call within the turn's limit |
 | `503` | `codex_image_unavailable`, `shutting_down` | Check the local Codex runtime or gateway process |
 | `504` | `request_timeout` | Check the configured connection deadline and provider state |
 

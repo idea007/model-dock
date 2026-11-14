@@ -87,7 +87,9 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
   const imageModelId = 'demo-source/codex-imagegen';
   if (entry === '?view=api') {
     await f.mock.app.store.mutate(f.mock.app.store.read().revision, state => {
-      state.models.find(row => row.id === model.id).capabilities.image_input = true;
+      const { capabilities } = state.models.find(row => row.id === model.id);
+      capabilities.image_input = true;
+      capabilities.tools = true;
       state.models.push({ id: imageModelId, nativeId: 'codex-imagegen', connectionId: model.connectionId, name: 'Codex image fixture',
         enabled: true, available: true, capability: 'image_generation', capabilities: { image_generation: true, text: false } });
     });
@@ -191,6 +193,21 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
     const { model: responseModel, store, stream } = JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]);
     assert.deepEqual({ model: responseModel, store, stream }, { model: model.id, store: false, stream: true });
     assert.ok(!clipboard.includes(key.token));
+    click('[data-language="en"]');
+    assert.match(document.querySelector('[data-api-id="responses"]').textContent, /Replay a sample function result/);
+    click('[data-code-id="api-code-responses-tool"]');
+    const toolRequest = JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]);
+    assert.equal(toolRequest.model, model.id);
+    assert.equal(toolRequest.tools[0].name, 'add');
+    assert.equal(toolRequest.store, false);
+    click('[data-code-id="api-code-responses-tool-result"]');
+    const replay = JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]);
+    const [call, result] = replay.input.slice(-2);
+    assert.equal(result.call_id, call.call_id);
+    assert.notEqual(result.call_id, call.id);
+    assert.deepEqual(JSON.parse(result.output), { result: 42 });
+    assert.ok(!clipboard.includes(key.token));
+    click('[data-language="zh-CN"]');
     click('[data-code-id="api-code-responses-vision"]');
     assert.ok(clipboard.includes(`${f.mock.connection.baseUrl}/responses`) && clipboard.includes(model.id));
     assert.match(clipboard, /type: "input_image", image_url: image/);

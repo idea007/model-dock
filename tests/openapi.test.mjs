@@ -104,7 +104,7 @@ test('the public spec examples execute against a scoped gateway and match real r
     const { examples, schema } = operation.requestBody.content[json];
     const validateRequest = validator(schema);
     const validateResponse = validator(operation.responses[200].content[json].schema);
-    for (const { value } of Object.values(examples)) {
+    for (const [example, { value }] of Object.entries(examples)) {
       const body = { ...value, model };
       validateRequest(body);
       const response = await fetch(app.origin + endpoint, { method: 'POST',
@@ -125,6 +125,13 @@ test('the public spec examples execute against a scoped gateway and match real r
           });
           assert.equal(frames.at(-1).type, 'response.completed');
           assert.equal(frames.at(-1).response.usage.total_tokens, 12);
+          if (example === 'function') {
+            const [call] = frames.at(-1).response.output;
+            assert.equal(call.type, 'function_call');
+            assert.equal(call.name, 'add');
+            const deltas = frames.filter(event => event.type === 'response.function_call_arguments.delta');
+            assert.deepEqual(deltas.map(event => JSON.parse(event.delta)), [{ a: 17, b: 25 }]);
+          }
         } else {
           const frames = [];
           for await (const frame of sse(response.body)) frames.push(parseEvent(frame));
@@ -133,11 +140,21 @@ test('the public spec examples execute against a scoped gateway and match real r
           assert.ok(frames.slice(0, -1).every(frame => frame.usage === null));
           assert.deepEqual(frames.at(-1).choices, []);
           assert.equal(frames.at(-1).usage.total_tokens, 12);
+          if (example === 'function') {
+            const calls = frames.flatMap(frame => frame.choices[0]?.delta.tool_calls ?? []);
+            assert.deepEqual(calls.map(call => call.function.name), ['add']);
+            assert.deepEqual(JSON.parse(calls[0].function.arguments), { a: 17, b: 25 });
+            assert.equal(frames.at(-2).choices[0].finish_reason, 'tool_calls');
+          }
         }
       } else {
         const result = await response.json();
         validateResponse(result);
         if (body.response_format?.type === 'json_object') assert.equal(JSON.parse(result.choices[0].message.content).greeting, 'Hello!');
+        if (example === 'functionOutput') {
+          const text = operation === chat ? result.choices[0].message.content : result.output[0].content[0].text;
+          assert.match(text, /"result":42/);
+        }
       }
     }
   }

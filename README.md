@@ -103,7 +103,7 @@ export MODEL_DOCK_MODEL='connection-id/model-id'
 node examples/chat.mjs
 ```
 
-No particular SDK is required. Any client that uses the supported subset of the Chat Completions protocol can connect.
+Use raw HTTP or an OpenAI-compatible SDK. Start with `chat.completions.create()` for message-based clients or use `responses.create()` with caller-supplied history. [Responses quick start](docs/api.md#responses)
 
 ```js
 import OpenAI from 'openai';
@@ -121,7 +121,11 @@ const { content, refusal } = result.choices[0].message;
 console.log(refusal ?? content);
 ```
 
-See the [plain JavaScript example](examples/chat.mjs), [Python SDK example](examples/chat.py), and [application tool-calling example](examples/tools.mjs). Keep project keys in your application's server-side environment variables, not in public browser scripts.
+Keep project keys in your application's server-side environment variables. [Plain JavaScript example](examples/chat.mjs) · [Python SDK example](examples/chat.py)
+
+### Function calling
+
+Use a published model that supports tools and grant it to your project key. Start with `tool_choice: "auto"` and `parallel_tool_calls: false` on OpenAI-compatible APIs, Ollama or Codex. The app executes the function and sends the result in the next request. Chat matches the result by `tool_call_id`. Responses uses `call_id` and keeps the history in the client with `store: false`. [Examples for both endpoints](docs/api.md#function-calling) · [Runnable Chat example](examples/tools.mjs)
 
 ## Three model sources
 

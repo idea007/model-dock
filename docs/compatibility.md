@@ -58,7 +58,7 @@ A gateway `429 connection_busy` includes `Retry-After: 2` and is returned before
 
 An explicit refusal completes normally even when structured output was requested. For other completed text outputs, Model Dock checks JSON syntax in both structured modes and the top-level object type in `json_object` mode. Schema constraints are handled by the upstream or native runtime. Assistant refusal history uses `refusal` and may use `content: null`. The OpenAI-compatible adapter forwards that history. Ollama and Codex can carry the refusal as assistant text.
 
-Both endpoints stream text as it arrives and hand off tool calls only after a completed turn and full validation. The caller executes the functions and sends back the results. Ollama tool results include the native `tool_name` and matching `tool_call_id`, and Ollama models must support tools. A declared lack of tool support rejects requests with new tool definitions.
+Both endpoints stream text as it arrives and hand off tool calls only after a completed turn and full validation. The caller executes the functions and sends back the results. Ollama tool results include the native `tool_name` and matching `tool_call_id`, and Ollama models must support tools. A declared lack of tool support rejects requests with new tool definitions. [Call and replay examples](api.md#function-calling)
 
 Chat Completions SSE ends with a finish-reason chunk, an optional usage chunk with `choices: []` when requested and known, then `[DONE]`. With `include_usage: true`, earlier chunks include `usage: null`. A failure after streaming starts arrives as `data: {"error": ...}` and closes without `[DONE]`. Treat any Chat Completions stream without the sentinel as incomplete.
 

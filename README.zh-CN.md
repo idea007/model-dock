@@ -103,7 +103,7 @@ export MODEL_DOCK_MODEL='connection-id/model-id'
 node examples/chat.mjs
 ```
 
-不依赖特定 SDK；任何能使用本项目兼容范围内 Chat Completions 协议的客户端都可以接入。
+可以使用原生 HTTP 或 OpenAI 兼容 SDK。使用 `chat.completions.create()` 发送消息，或使用 `responses.create()` 由调用方带回历史。[Responses 快速接入](docs/api.md#responses)
 
 ```js
 import OpenAI from 'openai';
@@ -121,7 +121,11 @@ const { content, refusal } = result.choices[0].message;
 console.log(refusal ?? content);
 ```
 
-[原生 JavaScript 示例](examples/chat.mjs)、[Python SDK 示例](examples/chat.py)、[应用工具调用示例](examples/tools.mjs)。示例密钥应放在应用服务端环境变量中，不放在公开网页脚本中。
+项目密钥应放在应用服务端的环境变量中。[原生 JavaScript 示例](examples/chat.mjs) · [Python SDK 示例](examples/chat.py)
+
+### 工具调用
+
+发布支持工具调用的模型，并为项目密钥授权。模型 API、Ollama 和 Codex 都可以从 `tool_choice: "auto"` 和 `parallel_tool_calls: false` 开始。应用执行函数，在下一轮回传结果。Chat 用 `tool_call_id` 配对。Responses 用 `call_id` 配对，并以 `store: false` 由客户端保存历史。[两种端点的完整示例](docs/api.md#function-calling) · [可运行的 Chat 示例](examples/tools.mjs)
 
 ## 三种模型来源
 

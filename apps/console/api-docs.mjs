@@ -63,13 +63,21 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
   const origin = new URL(baseUrl).origin;
   const textModel = models.find(model => model.capability !== 'image_generation' && model.capabilities?.text !== false);
   const visionModel = models.find(model => model.capability !== 'image_generation' && model.capabilities?.text !== false && model.capabilities?.image_input === true);
+  const toolModel = models.find(model => model.capability !== 'image_generation' && model.capabilities?.text !== false && model.capabilities?.tools === true);
   const visionId = visionModel?.id || 'connection-id/vision-model';
+  const toolId = toolModel?.id || 'connection-id/tool-model';
   const publishedImageId = imageModelId || models.find(model => model.capability === 'image_generation')?.id;
   const textId = textModel?.id || 'connection-id/model-id';
   const imageId = publishedImageId || 'connection-id/codex-imagegen';
   const { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes, maxInferenceRequestBytes } = imageOptions;
   const chatBody = { model: textId, messages: [{ role: 'user', content: t('docs.greetingPrompt') }] };
   const responsesBody = { model: textId, input: t('docs.greetingPrompt'), store: false };
+  const toolHistory = [{ role: 'user', content: t('docs.addPrompt') }];
+  const add = { name: 'add', parameters: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } },
+    required: ['a', 'b'], additionalProperties: false } };
+  const toolRequest = { model: toolId, tool_choice: 'auto', parallel_tool_calls: false };
+  const toolArguments = JSON.stringify({ a: 17, b: 25 });
+  const toolResult = JSON.stringify({ result: 42 });
 
   const catalog = endpoint('models', 'GET', '/v1/models', t('docs.listModels'), t('docs.listModelsSummary'), `
     <p>${t('docs.listModelsHelp')}</p>
@@ -84,7 +92,7 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
       [code('data[].default_reasoning_effort'), t('docs.defaultEffortField')],
       [code('data[].legacy_alias'), t('docs.aliasField')]
     ])}
-    ${block('models-response', t('docs.successResponse'), json({ object: 'list', data: [{ id: textId, object: 'model', created: 0, owned_by: 'connection-id', name: t('docs.modelName'), source: { id: 'connection-id', name: t('console.connectionName'), type: 'openai' }, capabilities: { text: true, tools: null, structured: null, thinking: null, image_input: textModel?.capabilities?.image_input ?? null }, context_window: null, reasoning_efforts: [], default_reasoning_effort: null }] }))}
+    ${block('models-response', t('docs.successResponse'), json({ object: 'list', data: [{ id: textId, object: 'model', created: 0, owned_by: 'connection-id', name: t('docs.modelName'), source: { id: 'connection-id', name: t('console.connectionName'), type: 'openai' }, capabilities: { text: true, tools: textModel?.capabilities?.tools ?? null, structured: null, thinking: null, image_input: textModel?.capabilities?.image_input ?? null }, context_window: null, reasoning_efforts: [], default_reasoning_effort: null }] }))}
     <p class="api-note">${t('docs.emptyCatalogHelp')}</p>
   `, expanded);
 
@@ -128,6 +136,18 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
       ['user', t('docs.forwarded'), t('docs.unsupported'), t('docs.unsupported')]
     ])}
     <p class="api-note">${t('docs.toolRoundTrip')}</p>
+    ${toolModel ? modelHint(toolId, t('docs.toolKind'), client) : `<p class="api-note">${t('docs.toolModelForExample')}</p>`}
+    ${block('chat-tool', t('docs.toolRequestCurl'), curl(`${baseUrl}/chat/completions`, {
+      ...toolRequest, messages: toolHistory, tools: [{ type: 'function', function: add }]
+    }), t('docs.copyCurl'))}
+    ${block('chat-tool-result', t('docs.toolResultCurl'), curl(`${baseUrl}/chat/completions`, {
+      model: toolId, messages: [
+        ...toolHistory,
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call_example', type: 'function',
+          function: { name: add.name, arguments: toolArguments } }] },
+        { role: 'tool', tool_call_id: 'call_example', content: toolResult }
+      ]
+    }), t('docs.copyCurl'))}
   `, expanded);
 
   const responses = endpoint('responses', 'POST', '/v1/responses', t('docs.responses'), t('docs.responsesSummary'), `
@@ -155,6 +175,17 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
     ${block('responses-stream', t('docs.responsesStreamCurl'), curl(`${baseUrl}/responses`, { ...responsesBody, stream: true }, { stream: true }), t('docs.copyCurl'))}
     <p>${t('docs.responsesStream')}</p>
     <p class="api-note">${t('docs.responsesReplay')}</p>
+    ${toolModel ? modelHint(toolId, t('docs.toolKind'), client) : `<p class="api-note">${t('docs.toolModelForExample')}</p>`}
+    ${block('responses-tool', t('docs.toolRequestCurl'), curl(`${baseUrl}/responses`, {
+      ...toolRequest, store: false, input: toolHistory, tools: [{ type: 'function', ...add }]
+    }), t('docs.copyCurl'))}
+    ${block('responses-tool-result', t('docs.toolResultCurl'), curl(`${baseUrl}/responses`, {
+      model: toolId, store: false, input: [
+        ...toolHistory,
+        { type: 'function_call', id: 'fc_example', call_id: 'call_example', name: add.name, arguments: toolArguments, status: 'completed' },
+        { type: 'function_call_output', call_id: 'call_example', output: toolResult }
+      ]
+    }), t('docs.copyCurl'))}
     <p>${t('docs.visionInputHelp', mib(maxInferenceRequestBytes))} ${t('docs.visionReplay')}</p>
     ${modelHint(visionModel?.id, t('docs.visionKind'), client)}
     ${block('responses-vision', t('docs.visionCurl'), imageFileCurl(`${baseUrl}/responses`, visionId, t('docs.visionPrompt'),
@@ -214,6 +245,7 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
         ['429', code('connection_busy'), t('docs.busyHelp')],
         ['429', code('upstream_rate_limited / codex_rate_limited'), t('docs.rateLimitedHelp')],
         ['502', code('upstream_auth_failed / upstream_protocol_error / upstream_json_invalid / codex_protocol_error'), t('docs.upstreamErrorHelp')],
+        ['502', code('upstream_tool_choice_failed / codex_tool_required / codex_tool_invalid'), t('docs.toolErrorHelp')],
         ['504', code('request_timeout'), t('docs.timeoutHelp')]
       ])}
       <p class="api-note">${t('docs.retryHelp')}</p>
