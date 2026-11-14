@@ -11,11 +11,14 @@ const write = value => process.stdout.write(JSON.stringify(value) + '\n');
 const notify = (method, params) => write({ method, params });
 const ok = (id, result = {}) => write({ id, result });
 function checkReferences(params) {
+  const workingDirectory = realpathSync(process.cwd());
   return params.input.slice(1).every((image, index) => {
     if (image.type !== 'localImage' || image.detail !== 'original') return false;
-    const directory = path.dirname(image.path);
-    if (path.dirname(realpathSync(directory)) !== process.cwd() || path.basename(image.path) !== `reference-${index + 1}.png`) return false;
-    return (statSync(image.path).mode & 0o777) === 0o600 && readFileSync(image.path).subarray(0, pngBytes.length).equals(pngBytes);
+    const directory = realpathSync(path.dirname(image.path));
+    if (path.dirname(directory) !== workingDirectory || path.basename(image.path) !== `reference-${index + 1}.png`) return false;
+    // Windows does not report POSIX owner, group, and other permission bits.
+    if (process.platform !== 'win32' && (statSync(image.path).mode & 0o777) !== 0o600) return false;
+    return readFileSync(image.path).subarray(0, pngBytes.length).equals(pngBytes);
   });
 }
 readline.createInterface({ input: process.stdin }).on('line', line => {
