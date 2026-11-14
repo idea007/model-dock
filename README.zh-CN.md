@@ -27,6 +27,14 @@ npm start
 
 服务端和接入端都可在侧栏底部切换「简体中文 / English」，两个页面各自在当前浏览器记住语言选择。
 
+**服务端切换到英文后**
+
+![服务端英文接口文档，左下角语言切换已选中 English](docs/screenshots/server-english.webp)
+
+**接入端切换到英文后**
+
+![接入端英文接入设置，左下角语言切换已选中 English](docs/screenshots/client-english.webp)
+
 ### 1. 添加模型来源
 
 在「连接与凭证」添加模型 API、Ollama 实例或已登录的本机 Codex CLI。下图以 Codex 为例。保存连接后，在对应卡片点击「发现模型」，查看检查状态和模型数量。
