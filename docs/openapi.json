@@ -3,7 +3,7 @@
   "info": {
     "title": "Model Dock inference API",
     "version": "0.1.0",
-    "description": "Local gateway for project-authorized models. The API exposes text subsets of OpenAI Chat Completions and Responses, and image generation with a Model Dock reference editing extension. Use the gateway origin and full paths below. The OpenAI SDK base URL ends in /v1."
+    "description": "Local gateway for project-authorized models. Chat Completions and Responses accept text and images and return text. The image generation endpoint supports a Model Dock reference editing extension. Use the gateway origin and full paths below. The OpenAI SDK base URL ends in /v1."
   },
   "servers": [
     {
@@ -56,7 +56,8 @@
                             "text": true,
                             "tools": null,
                             "structured": null,
-                            "thinking": null
+                            "thinking": null,
+                            "image_input": null
                           },
                           "context_window": null,
                           "reasoning_efforts": [],
@@ -78,6 +79,7 @@
                             "tools": false,
                             "structured": false,
                             "thinking": false,
+                            "image_input": false,
                             "image_generation": true
                           },
                           "context_window": null,
@@ -107,7 +109,7 @@
       "post": {
         "operationId": "createChatCompletion",
         "summary": "Create a chat completion",
-        "description": "Text-only chat with optional streaming, function calls and structured output. The adapter and model determine which optional parameters are available. The gateway cancels upstream work on disconnect.",
+        "description": "Chat with text or image input and optional streaming, function calls and structured output. Image parts are accepted in user messages, including history, subject to the model's capabilities. The gateway cancels upstream work on disconnect.",
         "requestBody": {
           "required": true,
           "x-max-body-bytes": 2097152,
@@ -159,6 +161,16 @@
                     "stream_options": {
                       "include_usage": true
                     }
+                  }
+                },
+                "imageInput": {
+                  "summary": "Ask about an image",
+                  "value": {
+                    "model": "connection-id/vision-model",
+                    "messages": [{ "role": "user", "content": [
+                      { "type": "text", "text": "What color is this image?" },
+                      { "type": "image_url", "image_url": { "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGOQS9kHAAHkAUESjHgQAAAAAElFTkSuQmCC", "detail": "auto" } }
+                    ] }]
                   }
                 },
                 "structured": {
@@ -326,7 +338,7 @@
       "post": {
         "operationId": "createResponse",
         "summary": "Create a stateless text response",
-        "description": "Create a JSON or streamed text response using a published model. The caller supplies conversation history. OpenAI-compatible and Codex models can hand off one application function per request. Ollama supports text. Model Dock does not store response items. The gateway cancels inference on disconnect.",
+        "description": "Create a JSON or streamed text response from text or images. The caller supplies conversation history, including any images used in earlier user messages. OpenAI-compatible and Codex models can hand off one application function per request. Model Dock does not store response items. The gateway cancels inference on disconnect.",
         "requestBody": {
           "required": true,
           "x-max-body-bytes": 2097152,
@@ -348,6 +360,22 @@
                       { "role": "user", "content": [{ "type": "input_text", "text": "Say it again." }] }
                     ],
                     "instructions": "Answer briefly.",
+                    "store": false,
+                    "stream": true
+                  }
+                },
+                "imageInput": {
+                  "summary": "Stream a follow-up using an image from history",
+                  "value": {
+                    "model": "connection-id/vision-model",
+                    "input": [
+                      { "role": "user", "content": [
+                        { "type": "input_text", "text": "What color is this image?" },
+                        { "type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGOQS9kHAAHkAUESjHgQAAAAAElFTkSuQmCC" }
+                      ] },
+                      { "role": "assistant", "content": "It is blue." },
+                      { "role": "user", "content": "Name a matching color." }
+                    ],
                     "store": false,
                     "stream": true
                   }
@@ -562,7 +590,7 @@
     },
     "responses": {
       "BadRequest": {
-        "description": "Malformed JSON, unsupported parameters, or provider request rejection. Codex uses context_length_exceeded for context limits and codex_bad_request for native bad requests. Check error.param when provided.",
+        "description": "Malformed JSON, unsupported parameters, or provider request rejection. Invalid image bytes or MIME types use invalid_image_input. Models that declare no image support return unsupported_model_capability. Codex uses context_length_exceeded for context limits and codex_bad_request for native bad requests. Check error.param when provided.",
         "headers": {
           "x-request-id": {
             "$ref": "#/components/headers/RequestId"
@@ -947,7 +975,8 @@
           "text",
           "tools",
           "structured",
-          "thinking"
+          "thinking",
+          "image_input"
         ],
         "additionalProperties": false,
         "properties": {
@@ -974,6 +1003,10 @@
               "boolean",
               "null"
             ]
+          },
+          "image_input": {
+            "type": ["boolean", "null"],
+            "description": "Accepts image input for text inference. A null value means the provider has not declared support."
           },
           "image_generation": {
             "const": true,
@@ -1149,7 +1182,7 @@
             }
           }
         },
-        "description": "Requests return one choice and accept strings or ordered text content parts. Provider support varies by field and model. Undeclared fields are rejected."
+        "description": "Requests return one choice and accept strings or ordered content parts. Only user messages may contain images. Provider support varies by field and model. Undeclared fields are rejected."
       },
       "ChatHistoryMessage": {
         "type": "object",
@@ -1174,10 +1207,13 @@
               {
                 "type": "array",
                 "minItems": 1,
-                "items": { "$ref": "#/components/schemas/TextContentPart" }
+                "items": { "oneOf": [
+                  { "$ref": "#/components/schemas/TextContentPart" },
+                  { "$ref": "#/components/schemas/ChatImagePart" }
+                ] }
               }
             ],
-            "description": "Text parts are joined in order without inserting delimiters. An assistant tool-call message may omit content."
+            "description": "Pure text parts are joined in order without inserting delimiters. Images can be interleaved with text in user messages, including history. An assistant tool-call message may omit content."
           },
           "name": {
             "type": "string",
@@ -1204,6 +1240,10 @@
           }
         },
         "allOf": [
+          {
+            "if": { "properties": { "role": { "const": "user" } } },
+            "else": { "properties": { "content": { "items": { "$ref": "#/components/schemas/TextContentPart" } } } }
+          },
           {
             "anyOf": [
               { "required": ["content"] },
@@ -1296,6 +1336,28 @@
         "properties": {
           "type": { "const": "text" },
           "text": { "type": "string" }
+        }
+      },
+      "ImageDataUrl": {
+        "type": "string",
+        "description": "A standard Base64 data URL with matching PNG, JPEG or WebP data.",
+        "pattern": "^[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]/(?:[pP][nN][gG]|[jJ][pP][eE][gG]|[wW][eE][bB][pP]);[bB][aA][sS][eE]64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)(?![\\s\\S])"
+      },
+      "ChatImagePart": {
+        "type": "object",
+        "required": ["type", "image_url"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "image_url" },
+          "image_url": {
+            "type": "object",
+            "required": ["url"],
+            "additionalProperties": false,
+            "properties": {
+              "url": { "$ref": "#/components/schemas/ImageDataUrl" },
+              "detail": { "const": "auto" }
+            }
+          }
         }
       },
       "FunctionTool": {
@@ -1688,7 +1750,7 @@
         "properties": {
           "model": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Authorized full model ID or a legacy alias." },
           "input": {
-            "description": "A user prompt or ordered, self-contained history. Function results reference a preceding function call by call_id. Include all results before adding the next message.",
+            "description": "A user prompt or ordered, self-contained history. Resend images in their original user messages. Function results reference a preceding function call by call_id. Include all results before adding the next message.",
             "oneOf": [
               { "type": "string", "minLength": 1 },
               { "type": "array", "minItems": 1, "maxItems": 2048, "items": {
@@ -1723,20 +1785,39 @@
               { "type": "array", "minItems": 1, "items": {
                 "oneOf": [
                   { "$ref": "#/components/schemas/ResponsesInputText" },
+                  { "$ref": "#/components/schemas/ResponsesInputImage" },
                   { "$ref": "#/components/schemas/ResponsesContentPart" }
                 ]
               } }
             ]
           }
         },
-        "if": { "properties": { "role": { "enum": ["system", "developer", "user"] } } },
-        "then": { "properties": { "content": { "items": { "$ref": "#/components/schemas/ResponsesInputText" } } } }
+        "allOf": [
+          {
+            "if": { "properties": { "role": { "const": "user" } } },
+            "else": { "properties": { "content": { "items": { "not": { "$ref": "#/components/schemas/ResponsesInputImage" } } } } }
+          },
+          {
+            "if": { "properties": { "role": { "const": "assistant" } } },
+            "else": { "properties": { "content": { "items": { "not": { "$ref": "#/components/schemas/ResponsesContentPart" } } } } }
+          }
+        ]
       },
       "ResponsesInputText": {
         "type": "object",
         "required": ["type", "text"],
         "additionalProperties": false,
         "properties": { "type": { "const": "input_text" }, "text": { "type": "string" } }
+      },
+      "ResponsesInputImage": {
+        "type": "object",
+        "required": ["type", "image_url"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "input_image" },
+          "image_url": { "$ref": "#/components/schemas/ImageDataUrl" },
+          "detail": { "const": "auto" }
+        }
       },
       "ResponsesContentPart": {
         "oneOf": [
@@ -1925,10 +2006,7 @@
           "reference_images": {
             "type": "array",
             "maxItems": 5,
-            "items": {
-              "type": "string",
-              "pattern": "^[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]/(?:[pP][nN][gG]|[jJ][pP][eE][gG]|[wW][eE][bB][pP]);[bB][aA][sS][eE]64,[A-Za-z0-9+/]+={0,2}$"
-            },
+            "items": { "$ref": "#/components/schemas/ImageDataUrl" },
             "description": "Ordered PNG, JPEG or WebP Base64 data URLs. The declared MIME type must match the decoded image. The decoded limit is 30 MiB per image and 50 MiB total.",
             "x-max-decoded-bytes-per-image": 31457280,
             "x-max-decoded-bytes-total": 52428800

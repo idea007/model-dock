@@ -9,8 +9,8 @@ Download the [OpenAPI 3.1 specification](openapi.json) from the repository or fr
 | Method and path | Operation |
 | --- | --- |
 | `GET /v1/models` | List published models and legacy aliases visible to the supplied key |
-| `POST /v1/chat/completions` | Generate one text completion as JSON or SSE |
-| `POST /v1/responses` | Create a stateless text response as JSON or SSE |
+| `POST /v1/chat/completions` | Generate text from text or image input as JSON or SSE |
+| `POST /v1/responses` | Create a stateless text response from text or images as JSON or SSE |
 | `POST /v1/images/generations` | Generate or edit one Codex image using a JSON body |
 
 ## Inference
@@ -23,7 +23,7 @@ See [authorized model metadata](#authorized-model-metadata) for capability field
 
 ### Chat Completions
 
-Send an exact model ID or an existing legacy alias and a `messages` array. Each message uses string `content` or a non-empty array of `{"type":"text","text":"…"}` parts. Model Dock joins the parts in order without adding separators. Set `n: 1` or omit it.
+Send an exact model ID or an existing legacy alias and a `messages` array. Each message uses string `content` or a non-empty array of parts. Model Dock joins pure text arrays in order. A user message can mix `text` and `image_url` parts. Set `n: 1` or omit it. [Image input examples](#image-input)
 
 An assistant message carrying `tool_calls` can omit `content` or set it to `null`. An explicit refusal can also use `content: null`. To resume after a function call, send the assistant's tool calls and all matching `tool` result messages. On Codex the gateway hands off one function per request and the calling app executes it.
 
@@ -42,12 +42,12 @@ For a completed `json_object` response, the gateway checks JSON syntax and requi
 
 ### Responses
 
-Use `POST /v1/responses` for text with OpenAI-compatible APIs, Ollama and Codex. OpenAI-compatible APIs and Codex can hand off one application function per turn. The gateway uses the same model IDs, project permissions and inference limits as Chat Completions.
+Use `POST /v1/responses` for text or image input with OpenAI-compatible APIs, Ollama and Codex. OpenAI-compatible APIs and Codex can hand off one application function per turn. The gateway uses the same model IDs, project permissions and inference limits as Chat Completions.
 
 | Field | Accepted values |
 | --- | --- |
 | `model` | Full authorized model ID or a legacy alias |
-| `input` | A non-empty user prompt or an ordered array of message and function items. Messages use `system`, `developer`, `user` or `assistant`. Send a string or `input_text` parts. You can replay emitted assistant message items with `output_text` or `refusal` parts |
+| `input` | A non-empty user prompt or an ordered array of message and function items. Messages use `system`, `developer`, `user` or `assistant`. User messages can mix `input_text` and `input_image`. Replay assistant output with `output_text` or `refusal` parts |
 | `instructions` | Optional string prepended as a system message. Resend it on each request that needs it |
 | `stream` | Optional boolean. Set `true` for SSE |
 | `store` | Omit or set `false`. Keep conversation history in the calling app |
@@ -105,6 +105,43 @@ if (call) {
 
 See the [provider compatibility matrix](compatibility.md#responses) and the [OpenAI Responses API reference](https://developers.openai.com/api/reference/resources/responses/methods/create).
 
+### Image input
+
+Choose a published model authorized for your project that can read images. The model catalog uses `capabilities.image_input` for this capability. A value of `false` rejects image requests. A value of `null` leaves support up to the upstream.
+
+Both endpoints accept PNG, JPEG and WebP as Base64 data URLs in user messages. Omit `detail` or pass `"auto"`. HTTP URLs, local paths and `file_id` return `400`. The entire JSON request, including encoded images, instructions and history, must fit within 2 MiB. Base64 uses roughly four bytes for every three image bytes.
+
+Use the same SDK setup as above, with `model` set to a vision-capable model ID. The example reads a local PNG and sends a Chat Completions request, then shows how to replay an image with Responses.
+
+```js
+import { readFile } from 'node:fs/promises';
+
+const dataUrl = 'data:image/png;base64,' + (await readFile('reference.png')).toString('base64');
+const question = 'What color is this image?';
+
+const chat = await sdk.chat.completions.create({ model, messages: [{
+  role: 'user', content: [
+    { type: 'text', text: question },
+    { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } }
+  ]
+}] });
+console.log(chat.choices[0].message.content);
+
+const history = [{
+  role: 'user', content: [
+    { type: 'input_text', text: question },
+    { type: 'input_image', image_url: dataUrl }
+  ]
+}];
+const reply = await sdk.responses.create({ model, input: history, store: false });
+const followUp = await sdk.responses.create({
+  model, input: [...history, ...reply.output, { role: 'user', content: 'Name a matching color.' }], store: false
+});
+console.log(followUp.output_text);
+```
+
+Both endpoints return text with the same JSON or SSE format used for text-only requests. Set `stream: true` to stream the answer. For a follow-up, resend the original user message with its image in `messages` or `input`. Images remain attached to their user messages throughout replay. [Provider compatibility](compatibility.md#image-input) · [OpenAI image input guide](https://developers.openai.com/api/docs/guides/images-vision)
+
 ### Images
 
 `POST /v1/images/generations` uses a published, authorized `connection-id/codex-imagegen` model. Use a project key to list models and select an entry whose `capabilities.image_generation` is `true`. Basic generation works with the OpenAI SDK's `images.generate({ model, prompt })`. Use the Model Dock `reference_images` extension on the same JSON endpoint for reference-based editing. The SDK's `images.edit()` calls `/v1/images/edits`, which returns `404` on Model Dock. See the [OpenAI image edit reference](https://developers.openai.com/api/reference/resources/images/methods/edit).
@@ -153,7 +190,7 @@ Record the gateway response header `x-request-id`. Include it, the HTTP status a
 
 | HTTP status | Example codes | What to check |
 | --- | --- | --- |
-| `400` | `invalid_request`, `unsupported_parameter`, `unsupported_model_capability`, `invalid_image_reference`, `reasoning_effort_disabled`, `upstream_rejected` | Check the body, the selected model and its adapter. Use `error.param` when provided |
+| `400` | `invalid_request`, `unsupported_parameter`, `unsupported_model_capability`, `invalid_image_input`, `invalid_image_reference`, `reasoning_effort_disabled`, `upstream_rejected` | Check the body, the selected model and its adapter. Use `error.param` when provided |
 | `400` | `context_length_exceeded`, `codex_bad_request` | For a context limit, shorten the input or send less history. For a Codex bad request, check the selected model and parameters |
 | `401` | `unauthorized`, `key_revoked` | Check or replace the project key |
 | `403` | `model_forbidden`, `host_forbidden`, `origin_forbidden` | Check the project's permissions and gateway origin |
@@ -172,7 +209,7 @@ The gateway submits the request once to the selected adapter. SDKs can retry on 
 
 ## Authorized model metadata
 
-Each authorized native model includes `name`, `source: {id, name, type}`, nullable `capabilities` values (`text`, `tools`, `structured`, `thinking`), `context_window`, `reasoning_efforts` and `default_reasoning_effort`. A null capability means unknown. `codex-imagegen` also sets `capabilities.image_generation: true` and `capabilities.text: false`. Legacy aliases carry `legacy_alias: true` and the base model identity fields. Use connection-qualified model IDs for new integrations.
+Each authorized native model includes `name`, `source: {id, name, type}`, nullable `capabilities` values (`text`, `tools`, `structured`, `thinking`, `image_input`), `context_window`, `reasoning_efforts` and `default_reasoning_effort`. A null capability means unknown. `codex-imagegen` also sets `capabilities.image_generation: true` and `capabilities.text: false`. Legacy aliases carry `legacy_alias: true` and the base model identity fields. Use connection-qualified model IDs for new integrations.
 
 The client app uses authorized native text models for application functions and uses the available image model IDs for its API examples. The gateway returns safe metadata scoped to the key.
 

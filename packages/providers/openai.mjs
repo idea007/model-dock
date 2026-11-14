@@ -12,7 +12,7 @@ export const openai = {
       const levels = Array.isArray(model.reasoning_efforts) ? [...new Set(model.reasoning_efforts.filter(effortName))] : [];
       return {
         nativeId: model.id, name: model.id,
-        capabilities: Object.fromEntries(['text', 'tools', 'structured', 'thinking'].map(key => [key, typeof model.capabilities?.[key] === 'boolean' ? model.capabilities[key] : null])),
+        capabilities: Object.fromEntries(['text', 'tools', 'structured', 'thinking', 'image_input'].map(key => [key, typeof model.capabilities?.[key] === 'boolean' ? model.capabilities[key] : null])),
         maxInputTokens: tokenLimit(model.max_input_tokens),
         maxOutputTokens: tokenLimit(model.max_output_tokens),
         contextWindow: tokenLimit(model.context_window),

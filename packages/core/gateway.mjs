@@ -58,7 +58,7 @@ export class Gateway {
       const allowed = model.reasoningPolicy?.allowedEfforts || declared;
       return { id: model.id, object: 'model', created: 0, owned_by: model.connectionId, name: model.name,
         source: { id: connection.id, name: connection.name, type: connection.type },
-        capabilities: { ...Object.fromEntries(['text', 'tools', 'structured', 'thinking'].map(key => [key, typeof model.capabilities?.[key] === 'boolean' ? model.capabilities[key] : null])),
+        capabilities: { ...Object.fromEntries(['text', 'tools', 'structured', 'thinking', 'image_input'].map(key => [key, typeof model.capabilities?.[key] === 'boolean' ? model.capabilities[key] : null])),
           ...(model.capability === 'image_generation' ? { image_generation: true } : {}) }, context_window: model.contextWindow || null,
         reasoning_efforts: declared.filter(level => allowed.includes(level)),
         default_reasoning_effort: model.reasoningPolicy?.defaultEffort || model.defaultEffort || null };
@@ -75,8 +75,8 @@ export class Gateway {
       requests: this.history,
       providers: [
         { id: 'openai', label: 'OpenAI-compatible API', capabilities: 'Provider-defined', parameters: 'Chat Completions subset; see compatibility documentation.' },
-        { id: 'ollama', label: 'Ollama', capabilities: 'Text, model-dependent tools and thinking, JSON' },
-        { id: 'codex', label: 'Codex CLI', capabilities: 'Text, JSON, application tools, native image generation', experimental: true }
+        { id: 'ollama', label: 'Ollama', capabilities: 'Text, JSON, model-dependent images, tools and thinking' },
+        { id: 'codex', label: 'Codex CLI', capabilities: 'Text, JSON, image input, application tools, native image generation', experimental: true }
       ] };
   }
   async saveConnection(input, id) {
@@ -232,14 +232,18 @@ export class Gateway {
     };
   }
   async *generate(body, principal, context) {
-    const normalized = validateChat(body);
+    const contentParam = context.responses ? 'input' : 'messages';
+    const normalized = validateChat(body, contentParam);
     const { model, route, connection, provider } = this.#resolveModel(body.model, principal);
     if (model.capability === 'image_generation') {
       throw new GatewayError('Use /v1/images/generations for this model.', 400, 'unsupported_model_capability', 'model');
     }
+    if (model.capabilities?.image_input === false && normalized.messages.some(message => Array.isArray(message.content))) {
+      throw new GatewayError('The selected model does not support image input.', 400, 'unsupported_model_capability', contentParam);
+    }
     if (context.responses && connection.type === 'ollama') {
       const field = normalized.tools?.length ? 'tools' : normalized.messages.some(message => message.tool_calls) ? 'input' : null;
-      if (field) throw new GatewayError('Ollama supports text only on /v1/responses.', 400, 'unsupported_parameter', field);
+      if (field) throw new GatewayError('Ollama function calls are unavailable on /v1/responses.', 400, 'unsupported_parameter', field);
     }
     const request = applyReasoningPolicy(model, route, normalized);
     const run = this.#startRequest(body.model, principal, model, connection, context);

@@ -30,6 +30,19 @@ export function prepareConversation(messages) {
   for (const [index, message] of messages.entries()) {
     const text = message.content || message.refusal || '';
     if (['system', 'developer'].includes(message.role)) { instructions.push(text); continue; }
+    if (message.role === 'user' && Array.isArray(message.content)) {
+      if (index === messages.length - 1) {
+        input = message.content.map(part => part.type === 'text' ? part : { type: 'image', ...part.image_url });
+      } else {
+        const content = message.content.map(part => {
+          if (part.type === 'text') return { type: 'input_text', text: part.text };
+          const { url, detail } = part.image_url;
+          return { type: 'input_image', image_url: url, detail };
+        });
+        history.push({ type: 'message', role: 'user', content });
+      }
+      continue;
+    }
     if (message.role === 'user' && index === messages.length - 1) { input = [{ type: 'text', text }]; continue; }
     if (message.role === 'tool') { history.push({ type: 'function_call_output', call_id: message.tool_call_id, output: text }); continue; }
     if (text) history.push({ type: 'message', role: message.role, content: [{ type: message.role === 'assistant' ? 'output_text' : 'input_text', text }] });

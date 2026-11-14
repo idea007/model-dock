@@ -1,4 +1,4 @@
-import { imageInfo } from './image-data.mjs';
+import { decodeImageData, imageDataByteLength, parseImageDataUrl } from './image-data.mjs';
 import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes } from './image-options.mjs';
 
 export const VERSION = '0.1.0';
@@ -64,23 +64,35 @@ export function decodeImageReferences(references = []) {
     const param = `reference_images[${index}]`;
     const invalid = () => fail('Use a Base64 data URL with matching PNG, JPEG or WebP image data.', 'invalid_image_reference', param);
     const tooLarge = () => { throw new GatewayError('A reference image exceeds 30 MiB.', 413, 'image_reference_too_large', param); };
-    const header = typeof value === 'string' && /^data:image\/(png|jpeg|webp);base64,/i.exec(value);
-    if (!header) invalid();
-    const encoded = value.slice(header[0].length);
+    const source = parseImageDataUrl(value);
+    if (!source) invalid();
+    const { encoded, format } = source;
     if (encoded.length > Math.ceil(maxImageReferenceBytes / 3) * 4) tooLarge();
-    if (encoded.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(encoded)) invalid();
-    const size = Buffer.byteLength(encoded, 'base64');
+    const size = imageDataByteLength(encoded);
+    if (!size) invalid();
     if (size > maxImageReferenceBytes) tooLarge();
     total += size;
     if (total > maxImageReferenceTotalBytes) throw new GatewayError('Reference images exceed 50 MiB in total.', 413, 'image_reference_too_large', 'reference_images');
-    const bytes = Buffer.from(encoded, 'base64');
-    const info = imageInfo(bytes);
-    if (info?.format !== header[1].toLowerCase()) invalid();
-    return { bytes, format: info.format };
+    const image = decodeImageData(encoded, format);
+    if (!image) invalid();
+    return image;
   });
 }
+
+function validateImagePart(part, param) {
+  exact(part, ['type', 'image_url']);
+  exact(part.image_url, ['url', 'detail']);
+  const { url, detail } = part.image_url;
+  if (detail !== undefined && detail !== 'auto') fail('Omit image detail or use auto.', 'unsupported_parameter', param);
+  if (typeof url === 'string' && !/^data:/i.test(url)) fail('Use a Base64 image data URL.', 'unsupported_content', param);
+  const source = parseImageDataUrl(url);
+  if (!source || !imageDataByteLength(source.encoded) || !decodeImageData(source.encoded, source.format, { checkContainer: true })) {
+    fail('Use a Base64 data URL with matching PNG, JPEG or WebP image data.', 'invalid_image_input', param);
+  }
+}
+
 export const PARAMS = ['model', 'messages', 'n', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'stop', 'seed', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'reasoning_effort', 'user'];
-export function validateChat(body) {
+export function validateChat(body, contentParam = 'messages') {
   exact(body, PARAMS); string(body.model, 'model', 512);
   if (body.n !== undefined && body.n !== 1) fail('This endpoint returns one choice per request.', 'unsupported_parameter', 'n');
   if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 2048) fail('messages must be a non-empty array (maximum 2048).');
@@ -95,21 +107,28 @@ export function validateChat(body) {
     }
     const content = message.content;
     if (Array.isArray(content)) {
-      if (!content.length) fail('A text content array must contain at least one part.', 'invalid_request', 'messages');
+      if (!content.length) fail('A content array must contain at least one part.', 'invalid_request', contentParam);
       const parts = [];
+      let hasImages = false;
       for (const part of content) {
-        if (part?.type !== 'text') fail('Only text content parts are supported.', 'unsupported_content', 'messages');
-        exact(part, ['type', 'text']);
-        if (typeof part.text !== 'string') fail('A text content part must contain a string.', 'invalid_request', 'messages');
-        parts.push(part.text);
+        if (part?.type === 'text') {
+          exact(part, ['type', 'text']);
+          if (typeof part.text !== 'string') fail('A text content part must contain a string.', 'invalid_request', contentParam);
+          parts.push(part.text);
+        } else if (part?.type === 'image_url' && message.role === 'user') {
+          validateImagePart(part, contentParam);
+          hasImages = true;
+        } else fail('Use text content parts or images in user messages.', 'unsupported_content', contentParam);
       }
-      normalizedMessages ||= [...body.messages];
-      normalizedMessages[index] = { ...message, content: parts.join('') };
+      if (!hasImages) {
+        normalizedMessages ||= [...body.messages];
+        normalizedMessages[index] = { ...message, content: parts.join('') };
+      }
     } else if (content === undefined && message.role === 'assistant' && message.tool_calls?.length) {
       normalizedMessages ||= [...body.messages];
       normalizedMessages[index] = { ...message, content: null };
     } else if (content !== null && typeof content !== 'string') {
-      fail('Use string content or an array of text parts.', 'unsupported_content', 'messages');
+      fail('Use string content or a content array.', 'unsupported_content', contentParam);
     }
     if (message.content === null && !(message.role === 'assistant' && (message.tool_calls?.length || message.refusal))) {
       fail('Only assistant tool calls or refusals may have null content.');

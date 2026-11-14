@@ -1,5 +1,5 @@
 import { sse } from './events.mjs';
-import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes } from './image-options.mjs';
+import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes, maxInferenceRequestBytes } from './image-options.mjs';
 import { apiDocsPage } from './api-docs.mjs';
 import { LocalizedError, dateTime, duration, errorText, initLanguage, language, languagePicker, languageSeparator, number, requestMetadata, selectLanguage, t } from '../../packages/ui/i18n.mjs';
 
@@ -52,7 +52,7 @@ function providerType(id) {
 }
 const views = { connections: ['console.connections', 'plug'], models: ['console.models', 'models'], api: ['common.apiDocs', 'docs'], playground: ['console.playground', 'play'], keys: ['console.projectAccess', 'key'] };
 const expandedApiEndpoints = new Set();
-const apiImageOptions = { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes };
+const apiImageOptions = { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes, maxInferenceRequestBytes };
 const settingsKey = 'model-dock-publication-draft';
 const storedSessionKey = 'model-dock-console-session';
 const manualTokenKey = 'model-dock-token';

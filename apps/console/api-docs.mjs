@@ -15,12 +15,12 @@ function curl(url, body, { auth = true, stream = false } = {}) {
   ].join(' \\\n');
 }
 
-function referenceCurl(url, model, prompt) {
+function imageFileCurl(url, model, prompt, body) {
   const encode = [
     'const fs = require("node:fs")',
     'const [file, model, prompt] = process.argv.slice(1)',
-    'const reference = "data:image/png;base64," + fs.readFileSync(file).toString("base64")',
-    'process.stdout.write(JSON.stringify({ model, prompt, reference_images: [reference] }))'
+    'const image = "data:image/png;base64," + fs.readFileSync(file).toString("base64")',
+    `process.stdout.write(JSON.stringify(${body}))`
   ].join('\n');
   return [
     'IMAGE_PATH=reference.png',
@@ -62,10 +62,12 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
   const baseUrl = gatewayUrl.replace(/\/+$/, '');
   const origin = new URL(baseUrl).origin;
   const textModel = models.find(model => model.capability !== 'image_generation' && model.capabilities?.text !== false);
+  const visionModel = models.find(model => model.capability !== 'image_generation' && model.capabilities?.text !== false && model.capabilities?.image_input === true);
+  const visionId = visionModel?.id || 'connection-id/vision-model';
   const publishedImageId = imageModelId || models.find(model => model.capability === 'image_generation')?.id;
   const textId = textModel?.id || 'connection-id/model-id';
   const imageId = publishedImageId || 'connection-id/codex-imagegen';
-  const { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes } = imageOptions;
+  const { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes, maxInferenceRequestBytes } = imageOptions;
   const chatBody = { model: textId, messages: [{ role: 'user', content: t('docs.greetingPrompt') }] };
   const responsesBody = { model: textId, input: t('docs.greetingPrompt'), store: false };
 
@@ -82,12 +84,12 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
       [code('data[].default_reasoning_effort'), t('docs.defaultEffortField')],
       [code('data[].legacy_alias'), t('docs.aliasField')]
     ])}
-    ${block('models-response', t('docs.successResponse'), json({ object: 'list', data: [{ id: textId, object: 'model', created: 0, owned_by: 'connection-id', name: t('docs.modelName'), source: { id: 'connection-id', name: t('console.connectionName'), type: 'openai' }, capabilities: { text: true, tools: null, structured: null, thinking: null }, context_window: null, reasoning_efforts: [], default_reasoning_effort: null }] }))}
+    ${block('models-response', t('docs.successResponse'), json({ object: 'list', data: [{ id: textId, object: 'model', created: 0, owned_by: 'connection-id', name: t('docs.modelName'), source: { id: 'connection-id', name: t('console.connectionName'), type: 'openai' }, capabilities: { text: true, tools: null, structured: null, thinking: null, image_input: textModel?.capabilities?.image_input ?? null }, context_window: null, reasoning_efforts: [], default_reasoning_effort: null }] }))}
     <p class="api-note">${t('docs.emptyCatalogHelp')}</p>
   `, expanded);
 
   const chat = endpoint('chat', 'POST', '/v1/chat/completions', t('docs.chat'), t('docs.chatSummary'), `
-    <p>${t('docs.chatHelp')}</p>
+    <p>${t('docs.chatHelp', mib(maxInferenceRequestBytes))}</p>
     <h3>${t('docs.requestParameters')}</h3>
     ${table([t('docs.parameter'), t('docs.parameterType'), t('docs.description')], [
       [code('model'), t('docs.requiredString'), t('docs.chatModelField')],
@@ -112,6 +114,10 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
     <h3>${t('docs.streaming')}</h3>
     ${block('chat-stream', t('docs.streamingCurl'), curl(`${baseUrl}/chat/completions`, { ...chatBody, stream: true, stream_options: { include_usage: true } }, { stream: true }), t('docs.copyCurl'))}
     <p>${t('docs.streamingHelp', code('text/event-stream'), code('data: [DONE]'))}</p>
+    <p>${t('docs.visionInputHelp', mib(maxInferenceRequestBytes))} ${t('docs.visionReplay')}</p>
+    ${modelHint(visionModel?.id, t('docs.visionKind'), client)}
+    ${block('chat-vision', t('docs.visionCurl'), imageFileCurl(`${baseUrl}/chat/completions`, visionId, t('docs.visionPrompt'),
+      '{ model, messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: image } }] }] }'), t('docs.copyCurl'))}
     <h3>${t('docs.providerSupport')}</h3>
     ${table([t('docs.capabilityParameter'), t('common.modelApi'), 'Ollama', 'Codex'], [
       [t('docs.samplingLimits'), t('docs.forwarded'), t('docs.nativeMapping'), t('docs.unsupported')],
@@ -125,13 +131,13 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
   `, expanded);
 
   const responses = endpoint('responses', 'POST', '/v1/responses', t('docs.responses'), t('docs.responsesSummary'), `
-    <p>${t('docs.responsesHelp')}</p>
+    <p>${t('docs.responsesHelp', mib(maxInferenceRequestBytes))}</p>
     <h3>${t('docs.requestParameters')}</h3>
     ${table([t('docs.parameter'), t('docs.parameterType'), t('docs.description')], [
       [code('model'), t('docs.requiredString'), t('docs.chatModelField')],
       [code('input'), t('docs.requiredStringArray'), t('docs.responsesInput')],
       [code('instructions'), t('docs.optionalString'), t('docs.responsesInstructions')],
-      [code('stream'), t('docs.optionalBoolean'), t('docs.streamField')],
+      [code('stream'), t('docs.optionalBoolean'), t('docs.responsesStreamField')],
       [code('store'), t('docs.optionalBoolean'), t('docs.responsesStore')],
       [code('tools / tool_choice'), t('docs.optional'), t('docs.responsesTools')],
       [code('parallel_tool_calls'), t('docs.optionalBoolean'), t('docs.responsesParallel')]
@@ -149,6 +155,10 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
     ${block('responses-stream', t('docs.responsesStreamCurl'), curl(`${baseUrl}/responses`, { ...responsesBody, stream: true }, { stream: true }), t('docs.copyCurl'))}
     <p>${t('docs.responsesStream')}</p>
     <p class="api-note">${t('docs.responsesReplay')}</p>
+    <p>${t('docs.visionInputHelp', mib(maxInferenceRequestBytes))} ${t('docs.visionReplay')}</p>
+    ${modelHint(visionModel?.id, t('docs.visionKind'), client)}
+    ${block('responses-vision', t('docs.visionCurl'), imageFileCurl(`${baseUrl}/responses`, visionId, t('docs.visionPrompt'),
+      '{ model, store: false, input: [{ role: "user", content: [{ type: "input_text", text: prompt }, { type: "input_image", image_url: image }] }] }'), t('docs.copyCurl'))}
   `, expanded);
 
   const images = endpoint('images', 'POST', '/v1/images/generations', t('docs.images'), t('docs.imagesSummary'), `
@@ -168,7 +178,8 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
     <p>${t('docs.imageResponseHelp', mib(maxImageResultBytes))}</p>
     <h3>${t('docs.editReferences')}</h3>
     <p>${t('docs.referenceEditHelp')}</p>
-    ${block('images-edit', t('docs.editCurl'), referenceCurl(`${baseUrl}/images/generations`, imageId, t('docs.editPrompt')), t('docs.copyCurl'))}
+    ${block('images-edit', t('docs.editCurl'), imageFileCurl(`${baseUrl}/images/generations`, imageId, t('docs.editPrompt'),
+      '{ model, prompt, reference_images: [image] }'), t('docs.copyCurl'))}
     <p class="api-note">${t('docs.continueImageHelp', code('data:image/${output_format};base64,${data[0].b64_json}'))}</p>
   `, expanded);
 
@@ -193,7 +204,7 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
     <section class="card api-errors" aria-labelledby="api-errors-title"><h2 id="api-errors-title">${t('docs.errorHandling')}</h2><p>${t('docs.errorHelp')}</p>
       ${block('error', t('docs.errorExample'), json({ error: { message: 'This key cannot use the selected model.', type: 'invalid_request_error', code: 'model_forbidden', param: null } }))}
       ${table([t('docs.httpStatus'), t('docs.errorCodes'), t('docs.errorResolution')], [
-        ['400', code('invalid_request / unsupported_parameter / codex_bad_request'), t('docs.badRequestHelp')],
+        ['400', code('invalid_request / unsupported_parameter / unsupported_model_capability / invalid_image_input'), t('docs.badRequestHelp')],
         ['400', code('context_length_exceeded'), t('errors.codexContextLength')],
         ['401', code('unauthorized / key_revoked'), t('docs.unauthorizedHelp')],
         ['403', code('model_forbidden'), t('docs.forbiddenHelp')],

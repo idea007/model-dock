@@ -6,7 +6,7 @@ import specification from '../docs/openapi.json' with { type: 'json' };
 import { IMAGE_PARAMS, PARAMS, VERSION } from '../packages/protocol/index.mjs';
 import { RESPONSES_PARAMS } from '../packages/protocol/responses.mjs';
 import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes,
-  maxImageRequestBytes, maxImageResultBytes } from '../packages/protocol/image-options.mjs';
+  maxImageRequestBytes, maxImageResultBytes, maxInferenceRequestBytes } from '../packages/protocol/image-options.mjs';
 import { sse } from '../packages/protocol/events.mjs';
 import { fixtureUpstream, setup } from './helpers.mjs';
 
@@ -54,6 +54,8 @@ test('the OpenAPI 3.1 document, payload examples and exported request fields agr
   assert.equal(references['x-max-decoded-bytes-per-image'], maxImageReferenceBytes);
   assert.equal(references['x-max-decoded-bytes-total'], maxImageReferenceTotalBytes);
   assert.equal(images.requestBody['x-max-body-bytes'], maxImageRequestBytes);
+  assert.equal(chat.requestBody['x-max-body-bytes'], maxInferenceRequestBytes);
+  assert.equal(responses.requestBody['x-max-body-bytes'], maxInferenceRequestBytes);
   assert.equal(ImageResult.properties.data.items.properties.b64_json['x-max-decoded-bytes'], maxImageResultBytes);
 
   const operations = [paths['/v1/models'].get, chat, responses, images];

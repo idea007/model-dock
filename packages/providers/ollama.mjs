@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { GatewayError } from '../protocol/index.mjs';
+import { parseImageDataUrl } from '../protocol/image-data.mjs';
 import { lines } from '../protocol/events.mjs';
 import { fetchUpstream, jsonResponse, headers, protocolError } from './http.mjs';
 
@@ -24,6 +25,7 @@ export const ollama = {
       models.push({ nativeId, name: nativeId, capabilities: {
         text: caps.length ? caps.includes('completion') : null,
         tools: caps.length ? caps.includes('tools') : null,
+        image_input: caps.length ? caps.includes('vision') : null,
         structured: true, thinking: caps.length ? caps.includes('thinking') : null
       }, contextWindow: nativeContext ? configured > 0 ? Math.min(configured, nativeContext) : nativeContext : null,
       sizeBytes: Number.isSafeInteger(item.size) ? item.size : null,
@@ -43,7 +45,11 @@ export const ollama = {
     const callNames = new Map();
     const messages = request.messages.map(message => {
       for (const call of message.tool_calls || []) callNames.set(call.id, call.function.name);
-      return { role: message.role === 'developer' ? 'system' : message.role, content: message.content || message.refusal || '',
+      const parts = Array.isArray(message.content) ? message.content : null;
+      const content = parts ? parts.filter(part => part.type === 'text').map(part => part.text).join('') : message.content || message.refusal || '';
+      const images = parts?.filter(part => part.type === 'image_url').map(part => parseImageDataUrl(part.image_url.url).encoded);
+      return { role: message.role === 'developer' ? 'system' : message.role, content,
+        ...(images?.length ? { images } : {}),
         ...(message.tool_calls ? { tool_calls: message.tool_calls.map(call => ({ function: { name: call.function.name, arguments: JSON.parse(call.function.arguments) } })) } : {}),
         ...(message.role === 'tool' ? { tool_name: callNames.get(message.tool_call_id) } : {}) };
     });

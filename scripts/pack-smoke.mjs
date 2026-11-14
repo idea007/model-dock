@@ -63,13 +63,15 @@ try {
   await api('/api/settings', { revision: state.revision, models, routes });
   const result = await api('/api/run', { featureId: 'chat', prompt: 'Package smoke test', stream: false });
   if (result.choices[0].message.content !== 'Package smoke response') throw new Error('Installed client-to-gateway call failed.');
+  const input = [{ role: 'user', content: [{ type: 'input_text', text: 'Package smoke test' },
+    { type: 'input_image', image_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGOQS9kHAAHkAUESjHgQAAAAAElFTkSuQmCC' }] }];
   const responses = await fetch(`${app.origin}/v1/responses`, {
     method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: 'smoke/chat', input: 'Package smoke test' })
+    body: JSON.stringify({ model: 'smoke/chat', input })
   });
   const completion = await responses.json();
   if (!responses.ok || completion.store !== false || completion.output?.[0]?.content[0]?.text !== 'Package smoke response') {
-    throw new Error('Installed Responses endpoint failed.');
+    throw new Error('Installed Responses endpoint failed to accept an image.');
   }
   console.log(`Package verified: ${manifest.filename}, ${manifest.files.length} files, ${manifest.size} bytes. Installed CLIs, HTTP assets, direct client entry, project-key connection and isolated test inference work outside the source tree.`);
 } finally { await demo?.close(); await app?.close(); await fs.rm(temporary, { recursive: true, force: true }); }

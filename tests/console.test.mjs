@@ -61,7 +61,7 @@ test('console links are single-use and authorize only an issued session', async 
 test('console: login, connection discovery, model publication, scoped key and JSON/SSE playground', async t => {
   const upstream = await fixtureUpstream(t, [{
     id: 'shared', max_input_tokens: 1_000_000, max_output_tokens: 393_216, context_window: 1_000_000,
-    reasoning_efforts: ['none', 'low', 'high', 'max'], default_reasoning_effort: 'high', capabilities: { text: true, thinking: true }
+    reasoning_efforts: ['none', 'low', 'high', 'max'], default_reasoning_effort: 'high', capabilities: { text: true, thinking: true, image_input: true }
   }, { id: 'slow' }, { id: 'broken' }]), app = await setup(t);
   const html = await fs.readFile(new URL('../apps/console/index.html', import.meta.url), 'utf8');
   const dom = new JSDOM(html, { url: app.origin });
@@ -243,6 +243,9 @@ test('console: login, connection discovery, model publication, scoped key and JS
   click('[data-code-id="api-code-responses-request"]');
   assert.ok(clipboard.includes(`${app.origin}/v1/responses`));
   assert.deepEqual(JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]), { model: model.id, input: exampleBody.messages[0].content, store: false });
+  click('[data-code-id="api-code-chat-vision"]');
+  assert.ok(clipboard.includes(`${app.origin}/v1/chat/completions`) && clipboard.includes(model.id));
+  assert.match(clipboard, /type: "image_url", image_url: \{ url: image \}/);
   for (const secret of [app.admin, key, 'fixture-upstream']) assert.ok(!document.querySelector('.api-docs').textContent.includes(secret), 'documentation never embeds stored credentials');
   assert.equal(upstream.calls.length, callsBeforeDocs, 'browsing and copying documentation does not invoke providers');
   click('[data-view="playground"]'); fill('model', model.id); fill('prompt', '你好'); submit('#play-form');

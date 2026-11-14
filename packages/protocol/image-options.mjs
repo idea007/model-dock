@@ -1,5 +1,6 @@
 const MiB = 1024 * 1024;
 
+export const maxInferenceRequestBytes = 2 * MiB;
 export const imageAspectRatios = ['16:9', '9:16', '1:1', '4:5'];
 export const maxImageReferences = 5;
 export const maxImageResultBytes = 30 * MiB;

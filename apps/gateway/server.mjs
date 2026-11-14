@@ -6,7 +6,7 @@ import { Store, newId } from '../../packages/core/store.mjs';
 import { Gateway } from '../../packages/core/gateway.mjs';
 import { assertLoopbackRequest } from '../../packages/protocol/loopback.mjs';
 import { GatewayError, VERSION, errorPayload, exact, object } from '../../packages/protocol/index.mjs';
-import { maxImageRequestBytes } from '../../packages/protocol/image-options.mjs';
+import { maxImageRequestBytes, maxInferenceRequestBytes } from '../../packages/protocol/image-options.mjs';
 import { ConsoleSessions } from './console-sessions.mjs';
 import { completionState, finalizeCompletion, mergeDelta } from './completion.mjs';
 import { beginStream, json, write } from './http.mjs';
@@ -27,7 +27,7 @@ const staticFiles = new Map([
   ['/assets/events.mjs', [path.join(directory, '../../packages/protocol/events.mjs'), 'text/javascript; charset=utf-8']],
   ['/assets/image-options.mjs', [path.join(directory, '../../packages/protocol/image-options.mjs'), 'text/javascript; charset=utf-8']]
 ]);
-async function readBody(request, limit = 2 * 1024 * 1024) {
+async function readBody(request, limit = maxInferenceRequestBytes) {
   if (!String(request.headers['content-type'] || '').toLowerCase().startsWith('application/json')) throw new GatewayError('Use Content-Type: application/json.', 415, 'unsupported_media_type');
   const tooLarge = () => new GatewayError(`Request exceeds the ${limit / (1024 * 1024)} MiB limit.`, 413, 'request_too_large');
   if (Number(request.headers['content-length']) > limit) {

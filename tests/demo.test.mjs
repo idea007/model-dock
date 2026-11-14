@@ -87,6 +87,7 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
   const imageModelId = 'demo-source/codex-imagegen';
   if (entry === '?view=api') {
     await f.mock.app.store.mutate(f.mock.app.store.read().revision, state => {
+      state.models.find(row => row.id === model.id).capabilities.image_input = true;
       state.models.push({ id: imageModelId, nativeId: 'codex-imagegen', connectionId: model.connectionId, name: 'Codex image fixture',
         enabled: true, available: true, capability: 'image_generation', capabilities: { image_generation: true, text: false } });
     });
@@ -189,6 +190,10 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
     assert.ok(clipboard.includes(`${f.mock.connection.baseUrl}/responses`));
     const { model: responseModel, store, stream } = JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]);
     assert.deepEqual({ model: responseModel, store, stream }, { model: model.id, store: false, stream: true });
+    assert.ok(!clipboard.includes(key.token));
+    click('[data-code-id="api-code-responses-vision"]');
+    assert.ok(clipboard.includes(`${f.mock.connection.baseUrl}/responses`) && clipboard.includes(model.id));
+    assert.match(clipboard, /type: "input_image", image_url: image/);
     assert.ok(!clipboard.includes(key.token));
     click('[data-api-id="images"] summary');
     assert.match(document.querySelector('[data-api-id="images"]').textContent, /images\.edit\(\)/);

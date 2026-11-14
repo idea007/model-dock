@@ -11,11 +11,16 @@ function messageFromItem(item) {
     fail('Invalid message item id or status.', 'invalid_request', 'input');
   }
   if (typeof item.content === 'string') return { role: item.role, content: item.content };
-  if (!Array.isArray(item.content) || !item.content.length) fail('Use text content or a non-empty array of text parts.', 'unsupported_content', 'input');
-  const text = [], refusal = [];
+  if (!Array.isArray(item.content) || !item.content.length) fail('Use text content or a non-empty array of content parts.', 'unsupported_content', 'input');
+  const content = [], refusal = [];
   for (const part of item.content) {
     if (part?.type === 'input_text') {
       exact(part, ['type', 'text']);
+    } else if (item.role === 'user' && part?.type === 'input_image') {
+      exact(part, ['type', 'image_url', 'detail']);
+      const { image_url: url, detail } = part;
+      content.push({ type: 'image_url', image_url: { url, ...(detail === undefined ? {} : { detail }) } });
+      continue;
     } else if (item.role === 'assistant' && part?.type === 'output_text') {
       exact(part, ['type', 'text', 'annotations', 'logprobs', 'parsed']);
       if ([part.annotations, part.logprobs].some(value => value !== undefined && (!Array.isArray(value) || value.length))) {
@@ -27,12 +32,12 @@ function messageFromItem(item) {
       refusal.push(part.refusal);
       continue;
     } else {
-      fail('Only text and assistant refusal content are supported.', 'unsupported_content', 'input');
+      fail('Use text, images in user messages, or assistant refusals.', 'unsupported_content', 'input');
     }
     if (typeof part.text !== 'string') fail('A text part must contain a string.', 'invalid_request', 'input');
-    text.push(part.text);
+    content.push({ type: 'text', text: part.text });
   }
-  return { role: item.role, content: text.length ? text.join('') : null, ...(refusal.length ? { refusal: refusal.join('') } : {}) };
+  return { role: item.role, content: content.length ? content : null, ...(refusal.length ? { refusal: refusal.join('') } : {}) };
 }
 
 function inputMessages(input) {

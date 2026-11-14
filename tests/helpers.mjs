@@ -7,16 +7,18 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startGateway } from '../apps/gateway/server.mjs';
 
-export async function fixtureUpstream(t, models = [{ id: 'shared' }, { id: 'slow' }, { id: 'broken' }]) {
+export async function fixtureUpstream(t, models = [{ id: 'shared' }, { id: 'slow' }, { id: 'broken' }], { ollamaVision = false } = {}) {
   const calls = []; let disconnects = 0;
   const server = http.createServer(async (request, response) => {
     const send = value => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
     if (request.url === '/v1/models') return send({ data: models });
-    if (request.url === '/api/tags') return send({ models: [{ name: 'local:small', size: 1024, details: { parameter_size: '1B', quantization_level: 'Q4' } }, { name: 'embed:small' }] });
+    if (request.url === '/api/tags') return send({ models: [{ name: 'local:small', size: 1024, details: { parameter_size: '1B', quantization_level: 'Q4' } },
+      ...(ollamaVision ? [{ name: 'local:vision' }] : []), { name: 'embed:small' }] });
     let body = ''; for await (const chunk of request) body += chunk;
     let value; try { value = JSON.parse(body || '{}'); } catch { response.writeHead(400); response.end(); return; }
     calls.push({ url: request.url, body: value, authorization: request.headers.authorization });
-    if (request.url === '/api/show') return send({ capabilities: value.model.startsWith('embed') ? ['embedding'] : ['completion', 'tools', 'thinking'], model_info: { 'llama.context_length': 8192 }, parameters: 'num_ctx 2048' });
+    if (request.url === '/api/show') return send({ capabilities: value.model.startsWith('embed') ? ['embedding']
+      : ['completion', 'tools', 'thinking', ...(value.model === 'local:vision' ? ['vision'] : [])], model_info: { 'llama.context_length': 8192 }, parameters: 'num_ctx 2048' });
     if (request.url === '/api/chat') {
       response.writeHead(200, { 'content-type': 'application/x-ndjson' });
       response.write(JSON.stringify({ message: { content: '本机' }, done: false }) + '\n');

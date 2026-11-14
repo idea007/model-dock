@@ -92,6 +92,7 @@ const translatedErrorCodes = new Map([
   ['context_length_exceeded', 'errors.codexContextLength'],
   ['codex_bad_request', 'errors.codexBadRequest'],
   ['codex_image_unavailable', 'errors.imageUnavailable'],
+  ['invalid_image_input', 'errors.invalidImageInput'],
   ['reasoning_effort_disabled', 'errors.reasoningLevelDisabled']
 ]);
 

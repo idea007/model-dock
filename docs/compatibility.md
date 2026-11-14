@@ -1,6 +1,6 @@
 # Compatibility contract · v0.1
 
-Model Dock implements text subsets of OpenAI Chat Completions and Responses, and a single-image endpoint for Codex. Chat requests use one model and one choice. Omit `n` or set it to `1`. The gateway joins non-empty arrays of text parts in order, and turns omitted assistant tool-call content into `null` before calling the adapter. Other content part types and invalid tool histories are rejected before inference. See the [OpenAPI 3.1 specification](openapi.json) for request and response schemas.
+Model Dock implements OpenAI-compatible text generation from text or images through Chat Completions and Responses, with a separate Codex image generation endpoint. Chat requests use one model and one choice. Omit `n` or set it to `1`. The gateway joins pure text arrays in order, preserves image parts in user messages and turns omitted assistant tool-call content into `null`. See the [OpenAPI 3.1 specification](openapi.json) for request and response schemas.
 
 ## Chat Completions and other endpoints
 
@@ -8,6 +8,7 @@ Model Dock implements text subsets of OpenAI Chat Completions and Responses, and
 | --- | --- | --- | --- |
 | JSON response / SSE | Yes | Yes | Yes |
 | Text messages and role history | Forwarded after input normalization | Native roles, with developer mapped to system | Native role history injection |
+| Image input `image_url` | Model-dependent | Model-dependent | Model-dependent |
 | Explicit refusal in response | `message.refusal` in JSON and `delta.refusal` in SSE when reported | Native text output | Native text output |
 | Function tools and results | Forwarded | Model-dependent; function arguments translated | One function handoff per request; caller executes it |
 | JSON object / schema | Provider-dependent | `format` mapping | Native output schema; JSON-object instruction |
@@ -28,13 +29,26 @@ Model Dock implements text subsets of OpenAI Chat Completions and Responses, and
 | `POST /v1/responses` | OpenAI-compatible provider | Ollama native API | Codex App Server |
 | --- | --- | --- | --- |
 | Stateless text / SSE | Via Chat Completions | Via `/api/chat` | Via temporary threads |
+| Image input `input_image` | Converted to `image_url` | Converted to message `images` | Native image input and history |
 | One application function per turn | Model-dependent | Unavailable | Supported |
-| Function tool choice | `auto`, `none`, `required`, or a named function, subject to the upstream | Text only | `auto`, `none`, `required`, or a named function |
-| Function `strict: true` | Forwarded | Text only | Rejected |
+| Function tool choice | `auto`, `none`, `required`, or a named function, subject to the upstream | Function calls unavailable | `auto`, `none`, `required`, or a named function |
+| Function `strict: true` | Forwarded | Function calls unavailable | Rejected |
 
-All three adapters accept a text prompt or caller-supplied message history. Responses always uses `store: false` and sends that flag to OpenAI-compatible Chat Completions upstreams. Send a completed `function_call` and a matching `function_call_output` with a string result when resuming a tool turn. The caller executes the function. Responses-only upstreams need a separate native adapter. Requests for stored responses, background execution, built-in tools, multimodal input, reasoning replay, and `max_output_tokens` are outside this release's request schema. See the [Responses API examples](api.md#responses).
+All three adapters accept a text prompt or caller-supplied message history. Responses always uses `store: false` and sends that flag to OpenAI-compatible Chat Completions upstreams. Send a completed `function_call` and a matching `function_call_output` with a string result when resuming a tool turn. The caller executes the function. Responses-only upstreams need a separate native adapter. Stored responses, background execution, built-in tools, audio, video, file input, reasoning replay, and `max_output_tokens` are outside this release's request schema. See the [Responses API examples](api.md#responses).
 
 The stream emits typed events and ends with `response.completed`, `response.incomplete` or `response.failed`. Known usage is included in the terminal response; otherwise it is `null`. Partial or invalid tool calls are withheld. The request body limit is 2 MiB, with up to 2048 input items within the shared message and output limits.
+
+## Image input
+
+Both text generation endpoints accept PNG, JPEG or WebP Base64 data URLs in user messages. Omit `detail` or use `auto`. The 2 MiB JSON limit includes all text, image data and replayed history. Resend each prior image in its original user message. [API examples](api.md#image-input)
+
+| Adapter | Image mapping | Model capability |
+| --- | --- | --- |
+| OpenAI-compatible API | Forwards ordered Chat Completions content parts and data URLs | Reads optional `capabilities.image_input` from `/models` |
+| Ollama | Sends the joined text and one ordered bare-Base64 `images` array per user message | Reads `vision` from `/api/show` |
+| Codex | Sends ordered image items in the current turn and `input_image` parts in earlier user messages | Reads `image` from `model/list` input modalities |
+
+The gateway rejects images when the model declares `image_input: false`. Unspecified support is reported as `null` and the selected upstream handles the request.
 
 ## Shared behavior
 

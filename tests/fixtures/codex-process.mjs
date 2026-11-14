@@ -1,5 +1,6 @@
 // Protocol fixture: no real CLI, account, model or inference service is used.
 import readline from 'node:readline';
+import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 const threads = new Map(); let next = 0;
@@ -10,6 +11,7 @@ const pngBytes = Buffer.from(png, 'base64');
 const write = value => process.stdout.write(JSON.stringify(value) + '\n');
 const notify = (method, params) => write({ method, params });
 const ok = (id, result = {}) => write({ id, result });
+const imageDigest = url => createHash('sha256').update(Buffer.from(url.split(',')[1], 'base64')).digest('hex');
 function checkReferences(params) {
   const workingDirectory = realpathSync(process.cwd());
   return params.input.slice(1).every((image, index) => {
@@ -46,7 +48,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (method === 'config/read') { ok(id, { config: { mcp_servers: { inherited: { enabled: true } } } }); return; }
   if (method === 'account/read') { ok(id, { account: { type: 'chatgpt' }, requiresOpenaiAuth: true }); return; }
   if (method === 'experimentalFeature/list') { ok(id, { data: [{ name: 'image_generation', enabled: imageChannel, stage: 'stable' }], nextCursor: null }); return; }
-  if (method === 'model/list') { ok(id, { data: [{ id: 'codex-fixture', displayName: 'Codex fixture', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'medium' }], defaultReasoningEffort: 'medium', inputModalities: ['text', 'image'], isDefault: true }], nextCursor: null }); return; }
+  if (method === 'model/list') {
+    ok(id, { data: [{ id: 'codex-fixture', displayName: 'Codex fixture', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'medium' }], defaultReasoningEffort: 'medium', inputModalities: ['text', 'image'], isDefault: true },
+      { id: 'codex-text-only', inputModalities: ['text'] }], nextCursor: null }); return;
+  }
   if (method === 'thread/start') {
     if (params.config?.['mcp_servers.inherited.enabled'] !== false || params.config.web_search !== 'disabled' ||
       params.sandbox !== 'read-only' || params.approvalPolicy !== 'never' || !params.ephemeral || imageChannel && params.dynamicTools?.length) {
@@ -147,7 +152,14 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     }
     notify('thread/tokenUsage/updated', { ...base, tokenUsage: { total: { inputTokens: 10, outputTokens: 4, totalTokens: 14 } } });
     const toolResult = thread.history.find(item => item.type === 'function_call_output');
-    const text = toolResult ? `工具结果：${toolResult.output}` : thread.history.some(item => item.role === 'assistant') ? '原生角色历史已保留' : 'Codex 测试回答';
+    let text = toolResult ? `工具结果：${toolResult.output}` : thread.history.some(item => item.role === 'assistant') ? '原生角色历史已保留' : 'Codex 测试回答';
+    if (prompt.startsWith('vision-check')) {
+      const current = params.input.map(part => part.type === 'image' ? ['image', imageDigest(part.url), part.detail ?? null] : ['text', part.text]);
+      const history = thread.history.filter(item => item.role === 'user').map(item => item.content.map(part => (
+        part.type === 'input_image' ? ['image', imageDigest(part.image_url), part.detail ?? null] : ['text', part.text]
+      )));
+      text = JSON.stringify({ current, history });
+    }
     notify('item/started', { ...base, item: { id: 'final', type: 'agentMessage', phase: 'final_answer' } });
     notify('item/agentMessage/delta', { ...base, itemId: 'final', delta: text });
     finishTurn(thread, 'completed'); return;

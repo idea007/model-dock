@@ -32,7 +32,7 @@ export function createCodexProvider(options = {}) {
       const models = await client.models(signal);
       const catalog = models.filter(model => model.id !== imageModelId).map(model => ({
         nativeId: model.id, name: model.displayName || model.id,
-        capabilities: { text: true, tools: true, structured: true },
+        capabilities: { text: true, tools: true, structured: true, image_input: Array.isArray(model.inputModalities) ? model.inputModalities.includes('image') : null },
         reasoningEfforts: (model.supportedReasoningEfforts || []).map(value => value.reasoningEffort || value.effort || value).filter(value => typeof value === 'string'),
         defaultEffort: model.defaultReasoningEffort || null,
         details: 'Local Codex CLI bridge. Inference uses the account/provider configured in Codex.'
@@ -43,7 +43,7 @@ export function createCodexProvider(options = {}) {
         if (supported) {
           catalog.push({
             nativeId: imageModelId, name: imageModelId, capability: 'image_generation',
-            capabilities: { image_generation: true, text: false, tools: false, structured: false, thinking: false },
+            capabilities: { image_generation: true, text: false, tools: false, structured: false, thinking: false, image_input: false },
             reasoningEfforts: [], defaultEffort: null,
             details: 'Native image generation and reference-based editing using the local Codex sign-in.'
           });
