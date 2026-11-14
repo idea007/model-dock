@@ -25,6 +25,8 @@ While the gateway is running, use `npm run console` to reopen and sign in to the
 
 The screenshots use a separate local instance on ports 4327 and 4328. When following the steps, copy the Base URL shown in your own console.
 
+Use **简体中文 / English** at the bottom of the sidebar in either app. Each app remembers its language in the current browser.
+
 ### 1. Add a model source
 
 Open **Connections & credentials** (`连接与凭证`) and add your model API, Ollama instance, or signed-in local Codex CLI. The walkthrough uses Codex. Save the connection, then click **Discover models** (`发现模型`) on its card. The card shows the discovery status and model count.

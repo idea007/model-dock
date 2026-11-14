@@ -82,7 +82,8 @@ test('console: login, connection discovery, model publication, scoped key and JS
   const source = (await fs.readFile(new URL('../apps/console/app.mjs', import.meta.url), 'utf8'))
     .replace("'./events.mjs'", JSON.stringify(new URL('../packages/protocol/events.mjs', import.meta.url).href))
     .replace("'./image-options.mjs'", JSON.stringify(new URL('../packages/protocol/image-options.mjs', import.meta.url).href))
-    .replace("'./api-docs.mjs'", JSON.stringify(new URL('../apps/console/api-docs.mjs', import.meta.url).href));
+    .replace("'./api-docs.mjs'", JSON.stringify(new URL('../apps/console/api-docs.mjs', import.meta.url).href))
+    .replace("'../../packages/ui/i18n.mjs'", JSON.stringify(new URL('../packages/ui/i18n.mjs', import.meta.url).href));
   module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
   const click = selector => { const element = document.querySelector(selector); assert.ok(element, selector); element.click(); };
   const fill = (name, value) => { const field = document.querySelector(`[name="${name}"]`); assert.ok(field, name); field.value = value; };
@@ -95,7 +96,14 @@ test('console: login, connection discovery, model publication, scoped key and JS
   const directAdd = type => `${providerGroup(type)} .provider-actions > [data-action="add-connection"]`;
   const connectionNames = type => [...document.querySelectorAll(`${providerGroup(type)} .connection-card h4`)].map(heading => heading.textContent);
   fill('token', 'incorrect'); submit('#login-form');
-  await until(() => document.querySelector('#login-form .form-error')?.textContent.includes('valid access token'));
+  await until(() => document.querySelector('#login-form .form-error')?.textContent.includes('需要有效的访问令牌'));
+  fill('token', 'unfinished');
+  click('[data-language="en"]');
+  assert.equal(document.documentElement.lang, 'en');
+  assert.equal(document.querySelector('h1').textContent, 'Open the console');
+  assert.equal(document.querySelector('#login-form [name="token"]').value, 'unfinished');
+  assert.match(document.querySelector('#login-form .form-error').textContent, /valid access token/);
+  click('[data-language="zh-CN"]');
   fill('token', app.admin); submit('#login-form');
   await until(() => document.querySelector('.shell'));
   assert.equal(document.querySelector('h1').textContent, '连接与凭证');
@@ -118,6 +126,12 @@ test('console: login, connection discovery, model publication, scoped key and JS
   click('[data-api-id="models"] > summary');
   click('[data-api-id="chat"] > summary');
   assert.equal(document.querySelectorAll('.api-endpoint[open]').length, 2, 'endpoints expand independently');
+  click('.sidebar-bottom [data-language="en"]');
+  assert.equal(document.querySelector('h1').textContent, 'API documentation');
+  assert.equal(document.querySelectorAll('.api-endpoint[open]').length, 2);
+  assert.match(document.querySelector('[data-api-id="chat"] .api-endpoint-body').textContent, /Request parameters/);
+  assert.equal(win.localStorage.getItem('model-dock-language'), 'en');
+  click('.sidebar-bottom [data-language="zh-CN"]');
   click('[data-code-id="api-code-models-request"]');
   assert.equal(clipboard, `curl '${app.origin}/v1/models' \\\n  -H "Authorization: Bearer $MODEL_DOCK_API_KEY"`);
   click('.nav [data-view="connections"]');
@@ -157,6 +171,11 @@ test('console: login, connection discovery, model publication, scoped key and JS
   assert.equal(document.querySelector(effort).getAttribute('aria-pressed'), 'false');
   assert.equal(document.querySelector(pin).getAttribute('aria-pressed'), 'true');
   assert.equal(app.store.read().models.find(row => row.id === model.id).reasoningPolicy, undefined, 'reasoning changes wait for save');
+  click('[data-language="en"]');
+  assert.equal(document.querySelector(publish).getAttribute('aria-checked'), 'true');
+  assert.equal(document.querySelector(effort).getAttribute('aria-pressed'), 'false');
+  assert.match(document.querySelector('[data-action="save-publication"]').textContent, /Save changes/);
+  click('[data-language="zh-CN"]');
   assert.match(document.querySelector('.catalog-runtime').textContent, /API 连接正常/);
   const check = '[data-action="check-connection"]';
   const refresh = '[data-action="refresh-catalog"]';
@@ -227,6 +246,12 @@ test('console: login, connection discovery, model publication, scoped key and JS
   assert.match(document.querySelector('#response-meta').textContent, /输入 5 \/ 输出 7/);
   assert.equal(upstream.calls.at(-1).body.reasoning_effort, 'low');
   await until(() => !document.querySelector('#send-button').disabled);
+  click('[data-language="en"]');
+  assert.equal(document.querySelector('#response-status').textContent, 'Completed');
+  assert.equal(document.querySelector('#response-output').textContent, '你好，来自测试上游。');
+  assert.match(document.querySelector('#response-meta').textContent, /Input 5 \/ Output 7/);
+  assert.equal(document.querySelector('[name="prompt"]').value, '你好');
+  click('[data-language="zh-CN"]');
   document.querySelector('[name="stream"]').checked = false; submit('#play-form');
   await until(() => document.querySelector('#response-status').textContent === '已完成');
   assert.equal(document.querySelector('#response-output').textContent, '你好，来自测试上游。');

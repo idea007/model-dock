@@ -1,12 +1,16 @@
 import { sse } from './events.mjs';
 import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes } from './image-options.mjs';
 import { apiDocsPage } from './api-docs.mjs';
+import { LocalizedError, dateTime, duration, errorText, initLanguage, language, languagePicker, languageSeparator, number, requestMetadata, selectLanguage, t } from '../../packages/ui/i18n.mjs';
+
+const titleKey = 'console.documentTitle';
+initLanguage(titleKey);
 
 const $ = selector => document.querySelector(selector);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const imageModel = model => model?.capability === 'image_generation';
 const playImages = new WeakMap();
-const imageRatioLabels = { '16:9': '横版 16:9', '9:16': '竖版 9:16', '1:1': '方图 1:1', '4:5': '竖版 4:5' };
+const imageRatioLabels = { '16:9': 'console.ratioLandscape', '9:16': 'console.ratioPortrait', '1:1': 'console.ratioSquare', '4:5': 'console.ratioPortraitFourFive' };
 const referenceFormats = { png: 'png', jpg: 'jpeg', jpeg: 'jpeg', webp: 'webp' };
 const icons = {
   dock: '<path d="M4 5h16v5H4zM4 14h16v5H4zM8 7.5h.01M8 16.5h.01"/>',
@@ -31,12 +35,22 @@ const icons = {
   computer: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>'
 };
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.dock}</svg>`;
-const types = {
-  openai: { name: '模型 API', icon: 'cloud', description: '接入支持 OpenAI 格式的模型服务。', addLabel: '添加 API 连接', defaultName: '我的模型 API', baseUrl: 'https://api.openai.com/v1' },
-  ollama: { name: 'Ollama', icon: 'computer', description: '发现并使用 Ollama 上已安装的模型。', addLabel: '添加 Ollama', defaultName: '本机 Ollama', baseUrl: 'http://127.0.0.1:11434' },
-  codex: { name: 'Codex', icon: 'terminal', description: '连接本机已登录的 Codex CLI。', addLabel: '添加 Codex', defaultName: '本机 Codex', baseUrl: '' }
+const providerTypes = {
+  openai: { name: 'common.modelApi', icon: 'cloud', description: 'console.openAiProviderHelp', addLabel: 'console.addApiConnection', defaultName: 'console.defaultApiName', baseUrl: 'https://api.openai.com/v1' },
+  ollama: { name: 'Ollama', icon: 'computer', description: 'console.ollamaProviderHelp', addLabel: 'console.addOllama', defaultName: 'common.localOllama', baseUrl: 'http://127.0.0.1:11434' },
+  codex: { name: 'Codex', icon: 'terminal', description: 'console.codexProviderHelp', addLabel: 'console.addCodex', defaultName: 'common.localCodex', baseUrl: '' }
 };
-const views = { connections: ['连接与凭证', 'plug'], models: ['模型与服务', 'models'], api: ['接口文档', 'docs'], playground: ['调用测试', 'play'], keys: ['项目访问', 'key'] };
+function providerType(id) {
+  const provider = providerTypes[id];
+  return provider && {
+    ...provider,
+    name: id === 'openai' ? t(provider.name) : provider.name,
+    description: t(provider.description),
+    addLabel: t(provider.addLabel),
+    defaultName: t(provider.defaultName)
+  };
+}
+const views = { connections: ['console.connections', 'plug'], models: ['console.models', 'models'], api: ['common.apiDocs', 'docs'], playground: ['console.playground', 'play'], keys: ['console.projectAccess', 'key'] };
 const expandedApiEndpoints = new Set();
 const apiImageOptions = { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes };
 const settingsKey = 'model-dock-publication-draft';
@@ -45,8 +59,8 @@ const manualTokenKey = 'model-dock-token';
 let settingsDraft, settingsError = '';
 let catalogRefresh, catalogNotice = '';
 const catalogColumns = [
-  { key: 'provider', label: '凭证 / 服务', width: 152, min: 120 },
-  { key: 'model', label: '模型', width: 256, min: 180 }
+  { key: 'provider', label: 'common.credentialService', width: 152, min: 120 },
+  { key: 'model', label: 'common.model', width: 256, min: 180 }
 ];
 const catalogWidths = new Map();
 try {
@@ -94,7 +108,7 @@ const availableChoices = () => usableModels().map(model => ({
   image: imageModel(model)
 }));
 const modelLabel = id => state.models.find(model => model.id === id)?.name || id;
-const timestamp = value => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚未检查';
+const timestamp = value => value ? dateTime(value) : t('common.notChecked');
 function toast(message, error = false) { clearTimeout(toastTimer); $('#toast').textContent = message; $('#toast').className = `show${error ? ' error' : ''}`; toastTimer = setTimeout(() => { $('#toast').className = ''; }, error ? 7000 : 3500); }
 async function api(url, options = {}) {
   const requestToken = token;
@@ -113,10 +127,10 @@ async function api(url, options = {}) {
       token = '';
       if (state && !generation) {
         state = null;
-        login('管理会话已失效，请重新打开管理台。');
+        login(new LocalizedError('console.sessionExpired'));
       }
     }
-    const error = new Error(data.error?.message || `请求失败（${response.status}）`);
+    const error = data.error?.message ? new Error(data.error.message) : new LocalizedError('common.requestFailedStatus', response.status);
     error.code = data.error?.code;
     throw error;
   }
@@ -130,7 +144,7 @@ async function load(renderPage = true) {
   if (renderPage) render();
 }
 async function mutate(url, method, body = {}, revision = state.revision) {
-  if (busy || catalogRefresh) throw new Error('正在处理，请稍候。');
+  if (busy || catalogRefresh) throw new Error(t('common.busy'));
   busy = true;
   try {
     const result = await api(url, { method, body: { ...body, revision } });
@@ -138,22 +152,26 @@ async function mutate(url, method, body = {}, revision = state.revision) {
   } catch (error) { try { await load(false); } catch {} throw error; }
   finally { busy = false; }
 }
+let loginError = '';
 function login(error = '', showManual = false) {
+  loginError = error;
+  const message = error ? errorText(error) : '';
   $('#app').innerHTML = `<main class="login"><div class="login-card">
     <div class="brand"><span class="brand-mark">${icon('dock')}</span>Model Dock</div>
-    <h1>打开管理台</h1>
-    <p>在项目目录运行 <code>npm run console</code>，即可打开已登录的工作台。</p>
-    <p>要在当前标签页打开，运行 <code>npm run --silent console -- --print</code>，把生成的一次性链接粘贴到地址栏。</p>
-    ${showManual ? '' : `<div class="form-error" role="alert">${escape(error)}</div>`}
+    <h1>${t('console.openConsole')}</h1>
+    <p>${t('console.loginOpenHelp', '<code>npm run console</code>')}</p>
+    <p>${t('console.loginTabHelp', '<code>npm run --silent console -- --print</code>')}</p>
+    ${showManual ? '' : `<div class="form-error" role="alert">${escape(message)}</div>`}
     <details${showManual ? ' open' : ''}>
-      <summary>使用管理令牌</summary>
-      <p>运行 <code>npm run --silent token</code> 获取本机管理令牌。</p>
+      <summary>${t('console.useAdminToken')}</summary>
+      <p>${t('console.loginTokenHelp', '<code>npm run --silent token</code>')}</p>
       <form id="login-form">
-        <label>管理令牌<input name="token" type="password" placeholder="md_admin_…" autocomplete="off" required></label>
-        ${showManual ? `<div class="form-error" role="alert">${escape(error)}</div>` : ''}
-        <button class="primary">进入工作台 ${icon('arrow')}</button>
+        <label>${t('console.adminToken')}<input name="token" type="password" placeholder="md_admin_…" autocomplete="off" required></label>
+        ${showManual ? `<div class="form-error" role="alert">${escape(message)}</div>` : ''}
+        <button class="primary">${t('console.enterConsole', icon('arrow'))}</button>
       </form>
     </details>
+    ${languagePicker()}
   </div></main>`;
 }
 async function useConsoleLink(code) {
@@ -191,7 +209,31 @@ function render() {
     for (const endpoint of apiEndpoints) if (endpoint.open) expandedApiEndpoints.add(endpoint.dataset.apiId);
   }
   const searchSelection = focus === 'search' ? [active.selectionStart, active.selectionEnd] : null;
-  $('#app').innerHTML = `<div class="shell reference-layout"><aside class="sidebar"><div class="brand"><span class="brand-mark">${icon('dock')}</span>Model Dock</div><div class="sidebar-sub">Model supply & access.</div><div class="nav-label">服务端 / SERVER</div><nav class="nav" aria-label="主导航">${Object.entries(views).map(([id, [name, symbol]]) => `<button data-view="${id}" class="${view === id ? 'active' : ''}" ${view === id ? 'aria-current="page"' : ''}>${icon(symbol)}${name}</button>`).join('')}</nav><div class="sidebar-bottom"><p><span class="local-dot"></span>本机网关</p><small>v${escape(state.version)} · 127.0.0.1</small><div><button class="quiet" data-action="logout">退出管理会话</button></div></div></aside><div class="main"><header class="topbar"><div class="crumb"><span>工作台</span><span>/</span><strong>${current[0]}</strong></div><span class="pill"><span class="local-dot"></span>本地运行</span></header><main class="page">${view === 'connections' ? connectionsPage() : view === 'models' ? modelsPage() : view === 'api' ? apiDocsPage({ baseUrl: state.baseUrl, models: usableModels(), version: state.version, expanded: expandedApiEndpoints }, apiImageOptions) : view === 'playground' ? playgroundPage() : keysPage()}<p class="footer-note">模型与凭证由你掌握 · Model Dock</p></main></div></div>`;
+  const page = view === 'connections' ? connectionsPage()
+    : view === 'models' ? modelsPage()
+    : view === 'api' ? apiDocsPage({ baseUrl: state.baseUrl, models: usableModels(), version: state.version, expanded: expandedApiEndpoints }, apiImageOptions)
+    : view === 'playground' ? playgroundPage() : keysPage();
+  $('#app').innerHTML = `<div class="shell reference-layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">${icon('dock')}</span>Model Dock</div>
+      <div class="sidebar-sub">${t('console.sidebarSubtitle')}</div>
+      <div class="nav-label">${t('console.serverNav')}</div>
+      <nav class="nav" aria-label="${t('console.mainNavigation')}">${Object.entries(views).map(([id, [label, symbol]]) =>
+        `<button data-view="${id}" class="${view === id ? 'active' : ''}" ${view === id ? 'aria-current="page"' : ''}>${icon(symbol)}<span>${t(label)}</span></button>`).join('')}</nav>
+      <div class="sidebar-bottom">
+        <div class="sidebar-status">
+          <p><span class="local-dot"></span>${t('console.localGateway')}</p>
+          <small>v${escape(state.version)} · 127.0.0.1</small>
+          <div><button class="quiet" data-action="logout">${t('console.logout')}</button></div>
+        </div>
+        ${languagePicker()}
+      </div>
+    </aside>
+    <div class="main">
+      <header class="topbar"><div class="crumb"><span>${t('console.workspace')}</span><span>/</span><strong>${t(current[0])}</strong></div><span class="pill"><span class="local-dot"></span>${t('console.runningLocally')}</span></header>
+      <main class="page">${page}<p class="footer-note">${t('console.footer')}</p></main>
+    </div>
+  </div>`;
   if (view === 'models') {
     const catalog = $('#catalog-table');
     applyCatalogWidths();
@@ -203,6 +245,55 @@ function render() {
   if (view === 'api' && apiFocus) document.querySelector(`.api-endpoint[data-api-id="${apiFocus}"] > summary`)?.focus({ preventScroll: true });
 }
 
+function changeLanguage(next) {
+  if (next === language()) return;
+  if (generation) { toast(t('common.waitForRequest')); return; }
+  const form = $('#play-form');
+  const imageDraft = form && playImages.get(form);
+  if (busy || catalogRefresh || imageDraft?.reading || $('#dialog').open || $('#login-form button:disabled')) {
+    toast(t('common.busy'));
+    return;
+  }
+  const testFields = form && {
+    model: form.elements.model.value,
+    prompt: form.elements.prompt.value,
+    stream: form.elements.stream.checked,
+    ratio: form.elements.aspect_ratio.value,
+    transparent: form.elements.transparent_background.checked
+  };
+  const output = form && $('#response-output');
+  const preview = output?.querySelector('img');
+  const scroll = output?.scrollTop || 0;
+  const manual = $('#login-form');
+  const tokenInput = manual?.elements.token.value;
+  const manualOpen = manual?.closest('details').open;
+  selectLanguage(next, titleKey);
+  clearTimeout(toastTimer);
+  $('#toast').className = '';
+  if (state && token) render();
+  else login(loginError, manualOpen);
+  if (manual) $('#login-form').elements.token.value = tokenInput;
+  if (testFields) {
+    const current = $('#play-form');
+    current.elements.model.value = testFields.model;
+    current.elements.prompt.value = testFields.prompt;
+    current.elements.stream.checked = testFields.stream;
+    current.elements.aspect_ratio.value = testFields.ratio;
+    current.elements.transparent_background.checked = testFields.transparent;
+    playImages.set(current, imageDraft);
+    updatePlayModel(current);
+    renderImageReferences(current);
+    if (imageDraft.editing) current.elements.prompt.placeholder = t('console.editPromptExample');
+    if (imageDraft.response) {
+      const currentOutput = $('#response-output');
+      if (preview) { preview.alt = t('console.generatedImage'); currentOutput.replaceChildren(preview); }
+      showPlayResponse(imageDraft.response, currentOutput);
+      currentOutput.scrollTop = scroll;
+    }
+  }
+  $(`[data-language="${next}"]`)?.focus({ preventScroll: true });
+}
+
 function focusCatalogControl(key) {
   if (key) {
     const control = [...document.querySelectorAll('.catalog-manager [data-catalog-focus]')].find(node => node.dataset.catalogFocus === key);
@@ -211,29 +302,29 @@ function focusCatalogControl(key) {
 }
 function connectionsPage() {
   return `<header class="between page-heading connections-heading">
-    <h1>连接与凭证</h1>
-    <button class="quiet small-button" data-action="refresh">${icon('refresh')} 刷新状态</button>
+    <h1>${t('console.connections')}</h1>
+    <button class="quiet small-button" data-action="refresh">${t('console.refreshStatus', icon('refresh'))}</button>
   </header>
   <section class="endpoint connections-endpoint" aria-labelledby="connections-endpoint-title">
     <div>
       <div class="row wrap">
-        <h2 id="connections-endpoint-title">一个地址，接入你的项目</h2>
+        <h2 id="connections-endpoint-title">${t('console.endpointTitle')}</h2>
         <span class="tag blue">OpenAI-compatible</span>
       </div>
       <code>${escape(state.baseUrl)}</code>
-      <p>发布模型后，使用独立项目密钥接入你的应用。</p>
+      <p>${t('console.endpointHelp')}</p>
     </div>
-    <button data-action="copy-endpoint">${icon('copy')} 复制地址</button>
+    <button data-action="copy-endpoint">${t('console.copyAddressButton', icon('copy'))}</button>
   </section>
   <section aria-labelledby="connections-title">
     <div class="section-header between wrap">
       <div>
-        <h2 id="connections-title">我的连接</h2>
-        <p>发现模型后，前往「模型与服务」发布。</p>
+        <h2 id="connections-title">${t('console.myConnections')}</h2>
+        <p>${t('console.discoveryHelp')}</p>
       </div>
-      <button class="quiet small-button" data-view="models">管理模型 ${icon('arrow')}</button>
+      <button class="quiet small-button" data-view="models">${t('console.manageModels', icon('arrow'))}</button>
     </div>
-    <div class="provider-groups">${Object.entries(types).map(([id, type]) => providerGroup(id, type)).join('')}</div>
+    <div class="provider-groups">${Object.keys(providerTypes).map(id => providerGroup(id, providerType(id))).join('')}</div>
   </section>`;
 }
 
@@ -246,7 +337,7 @@ function providerGroup(id, type) {
         <div>
           <div class="row wrap">
             <h3 id="provider-${id}-heading">${type.name}</h3>
-            ${id === 'codex' ? '<span class="tag">实验性</span>' : ''}
+            ${id === 'codex' ? `<span class="tag">${t('console.experimental')}</span>` : ''}
           </div>
           <p class="provider-description">${type.description}</p>
         </div>
@@ -262,11 +353,11 @@ function providerGroup(id, type) {
 function providerActions(id, addLabel, hasConnections) {
   if (id === 'codex' && hasConnections) return '';
   const addAnotherInstance = id === 'ollama' && hasConnections;
-  const addButton = `<button class="provider-add" data-action="add-connection" data-type="${id}">${icon('plus')} ${addAnotherInstance ? '添加其他实例' : addLabel}</button>`;
+  const addButton = `<button class="provider-add" data-action="add-connection" data-type="${id}">${icon('plus')} ${addAnotherInstance ? t('console.addInstance') : addLabel}</button>`;
   return `<div class="provider-actions row wrap">
-    ${hasConnections ? '' : '<span class="provider-empty">暂无连接</span>'}
+    ${hasConnections ? '' : `<span class="provider-empty">${t('console.noConnections')}</span>`}
     ${addAnotherInstance ? `<details class="provider-more">
-      <summary aria-label="更多 Ollama 操作">更多</summary>
+      <summary aria-label="${t('console.moreOllamaActions')}">${t('console.more')}</summary>
       ${addButton}
     </details>` : addButton}
   </div>`;
@@ -274,8 +365,8 @@ function providerActions(id, addLabel, hasConnections) {
 
 function connectionCard(connection) {
   const models = state.models.filter(model => model.connectionId === connection.id);
-  const status = !connection.enabled ? ['已停用', ''] : connection.status === 'connected' ? ['检查成功', 'good'] : connection.status === 'error' ? ['检查失败', 'error'] : ['未检查', ''];
-  const credential = connection.hasKey ? '已保存密钥' : connection.type === 'codex' ? '本机登录' : '未设置密钥';
+  const status = !connection.enabled ? [t('console.disabled'), ''] : connection.status === 'connected' ? [t('console.checkSucceeded'), 'good'] : connection.status === 'error' ? [t('console.checkFailed'), 'error'] : [t('console.unchecked'), ''];
+  const credential = connection.hasKey ? t('console.keySaved') : connection.type === 'codex' ? t('console.localSignIn') : t('console.noKey');
   return `<li class="connection-card">
     <div class="connection-heading between">
       <h4>${escape(connection.name)}</h4>
@@ -283,29 +374,29 @@ function connectionCard(connection) {
     </div>
     ${connection.baseUrl ? `<p class="connection-url mono" title="${escape(connection.baseUrl)}">${escape(connection.baseUrl)}</p>` : ''}
     <div class="connection-meta between wrap">
-      <small>${models.filter(model => model.available !== false).length} 个模型 · ${models.filter(usable).length} 个已启用</small>
+      <small>${t('console.connectionModelCount', models.filter(model => model.available !== false).length, models.filter(usable).length)}</small>
       <small>${credential}</small>
     </div>
-    <p class="status-line">${connection.checkedAt ? `上次检查 ${timestamp(connection.checkedAt)}` : '尚未发现模型'}${connection.errorCode ? ` · ${escape(connection.errorCode)}` : ''}</p>
+    <p class="status-line">${connection.checkedAt ? t('console.lastChecked', timestamp(connection.checkedAt)) : t('console.noDiscoveredModels')}${connection.errorCode ? ` · ${escape(connection.errorCode)}` : ''}</p>
     <div class="connection-actions between wrap">
-      <button class="small-button" data-action="discover" data-id="${connection.id}">${icon('refresh')} 发现模型</button>
+      <button class="small-button" data-action="discover" data-id="${connection.id}">${t('console.discoverModels', icon('refresh'))}</button>
       <div class="row">
-        <button class="quiet small-button" data-action="edit-connection" data-id="${connection.id}">编辑</button>
-        <button class="quiet small-button" data-action="delete-connection" data-id="${connection.id}">移除</button>
+        <button class="quiet small-button" data-action="edit-connection" data-id="${connection.id}">${t('common.edit')}</button>
+        <button class="quiet small-button" data-action="delete-connection" data-id="${connection.id}">${t('console.remove')}</button>
       </div>
     </div>
   </li>`;
 }
 let modelSearch = '', modelFilter = 'all';
 const catalogFilters = [
-  ['all', '全部'],
-  ['content_ai', '文本与理解'],
-  ['image_generation', '图片生成'],
-  ['video_generation', '视频生成'],
-  ['media_transcription', '语音识别'],
-  ['video_tts', '语音合成']
+  ['all', 'common.all'],
+  ['content_ai', 'common.textUnderstanding'],
+  ['image_generation', 'console.imageGeneration'],
+  ['video_generation', 'console.videoGeneration'],
+  ['media_transcription', 'console.speechRecognition'],
+  ['video_tts', 'console.speechSynthesis']
 ];
-const effortLabels = { none: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '极限', ultra: '超高' };
+const effortLabels = { none: 'common.off', minimal: 'effort.minimal', low: 'effort.low', medium: 'effort.medium', high: 'effort.high', xhigh: 'effort.xhigh', max: 'effort.max', ultra: 'effort.ultra' };
 const catalogDash = '—';
 
 function rememberSettings() {
@@ -315,18 +406,18 @@ function rememberSettings() {
       sessionStorage.setItem(settingsKey, JSON.stringify({ revision, changes: [...changes] }));
     } else sessionStorage.removeItem(settingsKey);
   } catch {
-    if (settingsDraft) settingsError = '无法暂存草稿，请在关闭页面前保存。';
+    if (settingsDraft) settingsError = t('console.draftStorageFailed');
   }
 }
 
 function modelTags(model) {
   const capabilities = model.capabilities || {};
   const tags = [];
-  if (imageModel(model)) tags.push('图片生成');
-  if (capabilities.text === true) tags.push('文本生成');
-  if (capabilities.tools === true) tags.push('工具调用');
-  if (capabilities.structured === true) tags.push('结构化输出');
-  if (capabilities.thinking === true || model.reasoningEfforts?.length) tags.push('深度思考');
+  if (imageModel(model)) tags.push(t('console.imageGeneration'));
+  if (capabilities.text === true) tags.push(t('common.textGeneration'));
+  if (capabilities.tools === true) tags.push(t('common.toolCalls'));
+  if (capabilities.structured === true) tags.push(t('common.structuredOutput'));
+  if (capabilities.thinking === true || model.reasoningEfforts?.length) tags.push(t('common.deepReasoning'));
   return tags;
 }
 
@@ -383,7 +474,7 @@ function compactTokens(value) {
   if (value % 1_000_000 === 0) return `${value / 1_000_000}M`;
   if (value % 1000 === 0) return `${value / 1000}K`;
   if (value % 1024 === 0) return `${value / 1024}K`;
-  return value.toLocaleString('en-US');
+  return number(value);
 }
 
 function catalogModel(model, connection) {
@@ -395,58 +486,58 @@ function catalogModel(model, connection) {
   const locked = pending || !enabled || !available;
   const modelId = escape(model.id), name = escape(model.name);
   const details = `<button type="button" class="catalog-icon" data-action="model-details" data-id="${modelId}"
-    data-catalog-focus="details:${modelId}" aria-label="查看${name}详情" aria-haspopup="dialog" title="模型详情">${icon('info')}</button>`;
+    data-catalog-focus="details:${modelId}" aria-label="${t('console.detailsAria', name)}" aria-haspopup="dialog" title="${t('console.modelDetails')}">${icon('info')}</button>`;
   const tags = modelTags(model);
   const inputLimit = compactTokens(model.maxInputTokens), outputLimit = compactTokens(model.maxOutputTokens);
   const inputLabel = inputLimit && !outputLimit ? `${inputLimit} tokens` : inputLimit ?? catalogDash;
   const context = compactTokens(model.contextWindow);
   const levels = declared.map(level => {
-    const label = Object.hasOwn(effortLabels, level) ? effortLabels[level] : level;
+    const label = Object.hasOwn(effortLabels, level) ? t(effortLabels[level]) : level;
     const open = allowed.includes(level);
-    const title = open && allowed.length === 1 ? '至少保留一个开放等级' : `${open ? '关闭' : '开放'}此思考等级`;
+    const title = open && allowed.length === 1 ? t('console.keepOneEffort') : t('console.effortAction', open ? t('common.close') : t('console.allow'));
     return { level: escape(level), label: escape(label), open, pinned: level === defaultEffort, title, disabled: locked || open && allowed.length === 1 };
   });
   return `<div class="catalog-model" data-model-id="${modelId}" data-enabled="${enabled}">
     <div class="catalog-model-info">
       <h3>${name}${image ? ` ${details}` : ''}</h3>
-      ${tags.length ? `<div class="catalog-badges" role="group" aria-label="${name}模型能力">${tags.map(tag => `<span class="catalog-badge">${escape(tag)}</span>`).join('')}</div>` : ''}
-      ${image ? '' : `<div class="catalog-limits">最大输入 ${inputLabel} · 最大输出 ${outputLimit ?? catalogDash}
+      ${tags.length ? `<div class="catalog-badges" role="group" aria-label="${t('console.capabilitiesAria', name)}">${tags.map(tag => `<span class="catalog-badge">${escape(tag)}</span>`).join('')}</div>` : ''}
+      ${image ? '' : `<div class="catalog-limits">${t('console.inputOutputLimits', inputLabel, outputLimit ?? catalogDash)}
         <span class="catalog-limits-end">${outputLimit ? 'tokens' : ''}${details}</span>
       </div>`}
-      ${!inputLimit && !outputLimit && context ? `<p class="catalog-limits">上下文窗口 ${context} tokens</p>` : ''}
-      ${levels.length ? `<span class="catalog-caption">开放的思考深度</span>
-        <div class="catalog-levels" role="group" aria-label="${name}开放的思考深度">${levels.map(({ level, label, open, title, disabled }) => `<button type="button" class="catalog-level" data-action="toggle-model-effort" data-id="${modelId}" data-level="${level}"
-          data-catalog-focus="open:${modelId}:${level}" aria-pressed="${open}" title="${title}" ${disabled ? 'disabled' : ''}>${label === level ? level : `${label}（${level}）`}</button>`).join('')}</div>` : ''}
+      ${!inputLimit && !outputLimit && context ? `<p class="catalog-limits">${t('console.contextTokens', context)}</p>` : ''}
+      ${levels.length ? `<span class="catalog-caption">${t('common.allowedEfforts')}</span>
+        <div class="catalog-levels" role="group" aria-label="${t('common.allowedEffortsAria', name)}">${levels.map(({ level, label, open, title, disabled }) => `<button type="button" class="catalog-level" data-action="toggle-model-effort" data-id="${modelId}" data-level="${level}"
+          data-catalog-focus="open:${modelId}:${level}" aria-pressed="${open}" title="${title}" ${disabled ? 'disabled' : ''}>${label === level ? level : t('common.effortWithId', label, level)}</button>`).join('')}</div>` : ''}
       <div class="catalog-publication">
-        <button type="button" class="catalog-switch" role="switch" aria-checked="${enabled}" aria-label="发布 ${name}"
+        <button type="button" class="catalog-switch" role="switch" aria-checked="${enabled}" aria-label="${t('console.publishModel', name)}"
           data-action="publish-model" data-id="${modelId}" data-catalog-focus="publish:${modelId}"
-          ${pending || !available && !enabled ? 'disabled' : ''}><span class="catalog-track" aria-hidden="true"></span>${enabled ? '已启用' : '未启用'}</button>
-        ${available ? '' : '<span class="catalog-warning">当前不可用</span>'}
+          ${pending || !available && !enabled ? 'disabled' : ''}><span class="catalog-track" aria-hidden="true"></span>${enabled ? t('common.enabled') : t('common.disabled')}</button>
+        ${available ? '' : `<span class="catalog-warning">${t('console.unavailable')}</span>`}
       </div>
     </div>
     <div class="catalog-reasoning">
-      ${levels.length ? `<div class="catalog-levels" role="group" aria-label="${name}思考深度（可选 / 默认）">${levels.map(({ level, label, open, pinned, title, disabled }) => `<span class="catalog-effort" data-allowed="${open}" data-locked="${locked}">
+      ${levels.length ? `<div class="catalog-levels" role="group" aria-label="${t('console.effortsAria', name)}">${levels.map(({ level, label, open, pinned, title, disabled }) => `<span class="catalog-effort" data-allowed="${open}" data-locked="${locked}">
         <button type="button" class="catalog-effort-toggle" data-action="toggle-model-effort" data-id="${modelId}" data-level="${level}"
-          data-catalog-focus="effort:${modelId}:${level}" aria-label="${name}：${label}可选" aria-pressed="${open}" title="${title}" ${disabled ? 'disabled' : ''}>${label}</button>
+          data-catalog-focus="effort:${modelId}:${level}" aria-label="${t('common.effortOptionAria', name, label)}" aria-pressed="${open}" title="${title}" ${disabled ? 'disabled' : ''}>${label}</button>
         <button type="button" class="catalog-effort-pin" data-action="pin-model-effort" data-id="${modelId}" data-level="${level}"
-          data-catalog-focus="pin:${modelId}:${level}" aria-label="${name}：${label}设为默认" aria-pressed="${pinned}"
-          title="${pinned ? '默认思考深度' : open ? `将${label}设为默认` : '请先开放此深度'}" ${locked || !open ? 'disabled' : ''}>${icon('pin')}</button>
-      </span>`).join('')}</div>` : `<span class="catalog-muted" title="暂无可选思考深度">${catalogDash}</span>`}
-      ${obsolete ? `<p class="catalog-caption catalog-warning">思考深度已变更。${levels.length && enabled && available ? '请选择可用的等级。' : '请在模型详情中清除失效设置。'}</p>` : ''}
+          data-catalog-focus="pin:${modelId}:${level}" aria-label="${t('common.effortDefaultAria', name, label)}" aria-pressed="${pinned}"
+          title="${pinned ? t('common.defaultEffort') : open ? t('console.setDefaultLabel', label) : t('console.allowEffortFirst')}" ${locked || !open ? 'disabled' : ''}>${icon('pin')}</button>
+      </span>`).join('')}</div>` : `<span class="catalog-muted" title="${t('console.noEffortOptions')}">${catalogDash}</span>`}
+      ${obsolete ? `<p class="catalog-caption catalog-warning">${t('console.effortChanged', levels.length && enabled && available ? t('console.selectSupportedEfforts') : t('console.clearInvalidInDetails'))}</p>` : ''}
     </div>
   </div>`;
 }
 
 const connectionErrors = {
-  upstream_auth_failed: '请检查 API 密钥和模型权限。',
-  upstream_unreachable: '无法连接服务，请检查服务地址和运行状态。',
-  upstream_rate_limited: '服务限流，请稍后重试。',
-  upstream_protocol_error: '上游返回了无法读取的响应。',
-  codex_auth_required: '请先登录本机 Codex CLI。',
-  codex_unavailable: '无法启动本机 Codex CLI，请检查安装状态。',
-  codex_timeout: 'Codex 未及时响应，请重试。',
-  codex_connection_failed: 'Codex 无法连接上游服务。',
-  codex_rate_limited: 'Codex 额度已用尽。'
+  upstream_auth_failed: 'console.checkKeyAndAccess',
+  upstream_unreachable: 'console.checkServiceAddress',
+  upstream_rate_limited: 'console.upstreamRateLimited',
+  upstream_protocol_error: 'console.upstreamUnreadable',
+  codex_auth_required: 'console.signInCodex',
+  codex_unavailable: 'console.checkCodexInstall',
+  codex_timeout: 'console.codexDidNotRespond',
+  codex_connection_failed: 'console.codexConnectionFailed',
+  codex_rate_limited: 'console.codexQuotaExhausted'
 };
 
 function recentModelCall(connectionId, nativeModel) {
@@ -456,62 +547,62 @@ function recentModelCall(connectionId, nativeModel) {
 }
 
 function connectionHealth(connection, models) {
-  if (!connection?.enabled) return { status: 'disabled', label: '服务已停用' };
-  if (catalogRefresh?.id === connection.id) return { status: 'checking', label: '正在检测…' };
+  if (!connection?.enabled) return { status: 'disabled', label: t('console.serviceDisabled') };
+  if (catalogRefresh?.id === connection.id) return { status: 'checking', label: t('console.checking') };
   const apiSource = connection.type === 'openai';
   const lastCall = recentModelCall(connection.id);
   const newerCall = lastCall && connection.checkedAt && Date.parse(lastCall.startedAt) + lastCall.durationMs > Date.parse(connection.checkedAt);
   const callError = newerCall && lastCall.status === 'failed' && connectionErrors[lastCall.errorCode];
-  if (callError) return { status: 'call_failed', label: apiSource ? 'API 最近调用失败' : '最近调用失败', detail: callError };
+  if (callError) return { status: 'call_failed', label: apiSource ? t('console.lastApiCallFailed') : t('console.lastCallFailed'), detail: t(callError) };
   const callSucceeded = newerCall && lastCall.status === 'succeeded';
   if (connection.status === 'error' && !callSucceeded) {
     return {
       status: 'error',
-      label: apiSource ? 'API 异常' : '连接异常',
-      detail: connectionErrors[connection.errorCode] || '连接检测失败，请重试。'
+      label: apiSource ? t('console.apiIssue') : t('common.connectionIssue'),
+      detail: t(connectionErrors[connection.errorCode] || 'console.retryConnectionCheck')
     };
   }
   if (connection.status === 'connected' || callSucceeded) {
-    if (apiSource) return { status: 'connected', label: 'API 连接正常' };
+    if (apiSource) return { status: 'connected', label: t('console.apiConnected') };
     const available = models.filter(model => model.available !== false).length;
-    if (!available) return { status: models.length ? 'unknown' : 'empty', label: '暂无可用模型' };
-    if (available < models.length) return { status: 'unknown', label: '部分模型未就绪' };
-    return { status: 'connected', label: '运行中' };
+    if (!available) return { status: models.length ? 'unknown' : 'empty', label: t('console.noAvailableModels') };
+    if (available < models.length) return { status: 'unknown', label: t('console.modelsNotReady') };
+    return { status: 'connected', label: t('console.serviceRunning') };
   }
-  return { status: 'unknown', label: apiSource ? 'API 待验证' : '待验证' };
+  return { status: 'unknown', label: apiSource ? t('console.apiUnverified') : t('console.unverified') };
 }
 
 function catalogConnection(connection, models, total) {
   const { status, label, detail } = connectionHealth(connection, total);
   const checking = status === 'checking';
   const isEmpty = status === 'empty';
-  const checkTitle = checking ? '正在检测连接…' : '刷新连接状态';
-  const lastCheck = connection.checkedAt ? `上次检测 ${timestamp(connection.checkedAt)}` : '尚未检测';
-  const statusTitle = `${lastCheck}\n根据连接检测和最近实际调用判断。`;
-  const source = connection.type === 'openai' ? connection.hasKey ? 'API Key · 已配置' : 'OpenAI-compatible'
-    : connection.type === 'codex' ? 'Codex CLI · 本机登录' : 'Ollama';
-  return `<section class="catalog-group" aria-label="${escape(connection.name)}模型" data-enabled="${connection.enabled}">
+  const checkTitle = checking ? t('console.checkingConnection') : t('console.checkConnection');
+  const lastCheck = connection.checkedAt ? t('console.previousCheck', timestamp(connection.checkedAt)) : t('console.neverChecked');
+  const statusTitle = t('console.connectionStatusDescription', lastCheck);
+  const source = connection.type === 'openai' ? connection.hasKey ? t('console.apiKeyConfigured') : 'OpenAI-compatible'
+    : connection.type === 'codex' ? t('console.codexLocalSignIn') : 'Ollama';
+  return `<section class="catalog-group" aria-label="${t('common.connectionModelsAria', escape(connection.name))}" data-enabled="${connection.enabled}">
     <div class="catalog-source">
       <h2>${escape(connection.name)}</h2>
       <p>${source}</p>
-      <span class="catalog-badge">${models.filter(model => model.available !== false).length} / ${models.length} 已配置</span>
+      <span class="catalog-badge">${t('console.configuredModelCount', models.filter(model => model.available !== false).length, models.length)}</span>
       <div class="catalog-runtime" data-status="${status}" title="${escape(statusTitle)}">
         ${isEmpty ? `<span role="status" aria-label="${label}" title="${label}">${catalogDash}</span>` : `<span class="catalog-status-dot" aria-hidden="true"></span><span role="status">${label}</span>`}
         <button type="button" class="catalog-icon catalog-status-refresh" data-action="check-connection" data-id="${escape(connection.id)}"
-          data-catalog-focus="check:${escape(connection.id)}" aria-label="刷新${escape(connection.name)}连接状态" title="${checkTitle}"
+          data-catalog-focus="check:${escape(connection.id)}" aria-label="${t('console.refreshConnectionAria', escape(connection.name))}" title="${checkTitle}"
           aria-busy="${checking}" ${busy || catalogRefresh || !connection.enabled ? 'disabled' : ''}>${icon('cycle')}</button>
       </div>
       ${detail ? `<p class="catalog-runtime-error">${escape(detail)}</p>` : ''}
-      ${connection.type === 'openai' ? `<button class="catalog-text" data-action="add-model" data-id="${escape(connection.id)}" ${busy || catalogRefresh ? 'disabled' : ''}>手动添加模型</button>` : ''}
+      ${connection.type === 'openai' ? `<button class="catalog-text" data-action="add-model" data-id="${escape(connection.id)}" ${busy || catalogRefresh ? 'disabled' : ''}>${t('console.registerModel')}</button>` : ''}
     </div>
-    <div>${models.length ? models.map(model => catalogModel(model, connection)).join('') : `<p class="catalog-empty" title="尚未发现模型">${catalogDash}</p>`}</div>
+    <div>${models.length ? models.map(model => catalogModel(model, connection)).join('') : `<p class="catalog-empty" title="${t('console.noDiscoveredModels')}">${catalogDash}</p>`}</div>
   </section>`;
 }
 
 function modelTable() {
   const needle = modelSearch.trim().toLowerCase();
   const groups = state.connections.map(connection => {
-    const sourceText = `${connection.name} ${connection.type} ${types[connection.type]?.name || ''}`;
+    const sourceText = `${connection.name} ${connection.type} ${providerType(connection.type)?.name || ''}`;
     const total = state.models.filter(model => model.connectionId === connection.id);
     const models = total.filter(model => {
       const category = model.capability || (model.capabilities?.text !== false ? 'content_ai' : '');
@@ -523,17 +614,17 @@ function modelTable() {
     return models.length || emptySource ? catalogConnection(connection, models, total) : '';
   }).join('');
   if (!groups) {
-    const label = catalogFilters.find(([key]) => key === modelFilter)[1];
-    let message = '请在“连接与凭证”添加模型来源。';
-    if (needle) message = '没有匹配的模型。';
-    else if (modelFilter !== 'all') message = `暂无${label}模型。`;
+    const label = t(catalogFilters.find(([key]) => key === modelFilter)[1]);
+    let message = t('console.addSourceFirst');
+    if (needle) message = t('console.noMatchingModels');
+    else if (modelFilter !== 'all') message = t('console.noModelsInCategory', label);
     return `<p class="catalog-empty">${message}</p>`;
   }
-  return `<div class="catalog-grid"><div class="catalog-header">${catalogColumns.map(column => `<span>${column.label}
+  return `<div class="catalog-grid"><div class="catalog-header">${catalogColumns.map(column => `<span>${t(column.label)}
     <button type="button" class="catalog-resizer" data-catalog-column="${column.key}" data-catalog-focus="column:${column.key}"
-      role="separator" aria-orientation="vertical" aria-label="调整${column.label}列宽" aria-valuemin="${column.min}" aria-valuemax="1200"
-      aria-valuenow="${catalogWidth(column)}" title="拖动调整列宽，双击恢复默认宽度"></button></span>`).join('')}
-    <span>思考深度（可选 / 默认）</span></div>${groups}</div>`;
+      role="separator" aria-orientation="vertical" aria-label="${t('common.resizeColumn', t(column.label))}" aria-valuemin="${column.min}" aria-valuemax="1200"
+      aria-valuenow="${catalogWidth(column)}" title="${t('common.resizeColumnHelp')}"></button></span>`).join('')}
+    <span>${t('common.effortsHeading')}</span></div>${groups}</div>`;
 }
 
 function catalogWidth(column, width = catalogWidths.get(column.key) ?? column.width) {
@@ -564,8 +655,8 @@ function modelsPage() {
   const conflict = settingsDraft && settingsDraft.revision !== state.revision;
   const pending = Boolean(busy || catalogRefresh);
   const refreshing = Boolean(catalogRefresh?.all);
-  const refreshLabel = refreshing ? '正在刷新…' : dirty ? '更新目录（保留修改）' : '刷新目录';
-  const feedback = dirty ? `${dirty} 项未保存` : catalogNotice;
+  const refreshLabel = refreshing ? t('common.refreshing') : dirty ? t('console.refreshKeepChanges') : t('console.refreshCatalog');
+  const feedback = dirty ? t('console.unsavedChangeCount', dirty) : catalogNotice;
   const unavailable = state.models.some(model => settingsDraft?.changes.get(model.id)?.enabled === true
     && (model.available === false || !state.connections.find(connection => connection.id === model.connectionId)?.enabled));
   const invalidEfforts = state.models.some(model => {
@@ -573,34 +664,34 @@ function modelsPage() {
     return policy && reasoningLevels(model, policy).obsolete;
   });
   const enabled = state.models.filter(model => draftModelSettings(model).enabled).length;
-  return `<div class="cm-page-heading"><h1>${icon('sliders')} 模型与服务</h1></div>
-    <section class="catalog-manager" aria-label="模型与服务" aria-busy="${pending}">
+  return `<div class="cm-page-heading"><h1>${t('console.modelsHeading', icon('sliders'))}</h1></div>
+    <section class="catalog-manager" aria-label="${t('console.models')}" aria-busy="${pending}">
       <div class="catalog-toolbar">
-        <div class="catalog-filters" role="group" aria-label="模型类型筛选">
+        <div class="catalog-filters" role="group" aria-label="${t('common.modelTypeFilters')}">
           ${catalogFilters.map(([key, label]) => `<button type="button" data-action="catalog-filter" data-value="${key}"
-            data-catalog-focus="filter:${key}" aria-pressed="${modelFilter === key}">${label}</button>`).join('')}
+            data-catalog-focus="filter:${key}" aria-pressed="${modelFilter === key}">${t(label)}</button>`).join('')}
         </div>
         <div class="catalog-actions">
-          <span class="catalog-muted">已启用 ${enabled} / ${state.models.length}</span>
+          <span class="catalog-muted">${t('common.enabledCount', enabled, state.models.length)}</span>
           <button class="catalog-save ${dirty ? 'primary' : ''}" data-action="save-publication" data-catalog-focus="save"
-            ${!dirty || pending || conflict || unavailable || invalidEfforts ? 'disabled' : ''}>${busy ? '处理中…' : dirty ? `保存更改 · ${dirty}` : '已保存'}</button>
+            ${!dirty || pending || conflict || unavailable || invalidEfforts ? 'disabled' : ''}>${busy ? t('common.working') : dirty ? t('common.saveChangesCount', dirty) : t('common.saved')}</button>
         </div>
       </div>
       <div class="catalog-secondary">
-        <input id="catalog-search" type="search" data-catalog-focus="search" aria-label="搜索模型或供应商" placeholder="搜索模型或供应商…" value="${escape(modelSearch)}">
+        <input id="catalog-search" type="search" data-catalog-focus="search" aria-label="${t('console.searchModels')}" placeholder="${t('console.searchModelsPlaceholder')}" value="${escape(modelSearch)}">
         <div class="catalog-actions">
           ${feedback ? `<span class="catalog-muted" role="status">${feedback}</span>` : ''}
-          <button class="catalog-text" data-view="connections">管理连接与凭证</button>
-          <button class="catalog-text" data-action="revert-publication" data-catalog-focus="revert" ${!dirty || pending ? 'disabled' : ''}>撤销更改</button>
+          <button class="catalog-text" data-view="connections">${t('console.manageConnections')}</button>
+          <button class="catalog-text" data-action="revert-publication" data-catalog-focus="revert" ${!dirty || pending ? 'disabled' : ''}>${t('common.discardChanges')}</button>
           <button class="catalog-text" data-action="refresh-catalog" data-catalog-focus="refresh" aria-busy="${refreshing}"
-            title="检查已启用的服务并更新模型目录" ${pending ? 'disabled' : ''}>${refreshLabel}</button>
+            title="${t('console.refreshCatalogHelp')}" ${pending ? 'disabled' : ''}>${refreshLabel}</button>
         </div>
       </div>
-      ${conflict ? '<p class="catalog-feedback" role="status">目录已在其他页面更新。设置草稿已保留，请撤销更改后重新编辑。</p>' : ''}
-      ${unavailable && !conflict ? '<p class="catalog-feedback" role="status">有待发布的模型已不可用。请调整对应的发布开关后保存。</p>' : ''}
-      ${invalidEfforts && !conflict ? '<p class="catalog-feedback" role="status">部分修改使用了已失效的思考深度。请调整对应模型的设置后保存。</p>' : ''}
+      ${conflict ? `<p class="catalog-feedback" role="status">${t('console.catalogConflict')}</p>` : ''}
+      ${unavailable && !conflict ? `<p class="catalog-feedback" role="status">${t('console.unavailablePendingModel')}</p>` : ''}
+      ${invalidEfforts && !conflict ? `<p class="catalog-feedback" role="status">${t('console.unavailablePendingEffort')}</p>` : ''}
       ${settingsError ? `<p class="catalog-feedback catalog-warning" role="alert">${escape(settingsError)}</p>` : ''}
-      <div id="catalog-table" class="catalog-scroll" role="region" tabindex="0" aria-label="按凭证查看模型与服务">${modelTable()}</div>
+      <div id="catalog-table" class="catalog-scroll" role="region" tabindex="0" aria-label="${t('console.catalogRegion')}">${modelTable()}</div>
     </section>`;
 }
 
@@ -655,12 +746,12 @@ async function refreshModelServices(id) {
       if (!await inspectConnection(connection.id)) failed++;
     }
     if (failed && all) {
-      settingsError = `${failed} 个服务检测失败。已保留原有目录，请查看各服务的状态。`;
+      settingsError = t('console.serviceChecksFailed', failed);
     } else if (!failed) {
-      catalogNotice = all ? '目录已更新' : '连接检测完成';
+      catalogNotice = all ? t('console.catalogUpdated') : t('console.connectionCheckComplete');
     }
   } catch (error) {
-    settingsError = error.code === 'revision_conflict' ? '目录已更新，请重新检测连接。' : '刷新失败，请重试。';
+    settingsError = error.code === 'revision_conflict' ? t('console.retryChangedCatalog') : t('console.refreshFailed');
   } finally {
     catalogRefresh = undefined;
     if (view === 'models' || view === 'connections') {
@@ -675,65 +766,69 @@ async function refreshModelServices(id) {
 function playgroundPage() {
   const choices = availableChoices();
   const image = choices[0]?.image;
-  return `<div class="page-heading"><div class="eyebrow">PLAYGROUND</div><h1>在接入前，先试一次。</h1><p>通过网关发送真实请求。调用会使用所选来源的额度。</p></div>
+  return `<div class="page-heading"><div class="eyebrow">${t('console.playgroundEyebrow')}</div><h1>${t('console.playgroundTitle')}</h1><p>${t('console.playgroundHelp')}</p></div>
     <div class="playground">
       <form id="play-form" class="card stack">
-        <h2>发送请求</h2>
-        <label>模型<select name="model" aria-label="模型" required>${choices.length ? choices.map(item => `<option value="${escape(item.id)}">${escape(item.name)}</option>`).join('') : '<option value="">请先发布一个模型</option>'}</select></label>
-        <label>提示词<textarea name="prompt" rows="6" placeholder="${playgroundPlaceholder(image)}" ${image ? 'maxlength="4000"' : ''} required></textarea></label>
-        <label id="play-stream" class="checkbox-label" ${image ? 'hidden' : ''}><input type="checkbox" name="stream" checked>流式输出</label>
+        <h2>${t('console.sendRequest')}</h2>
+        <label>${t('common.model')}<select name="model" aria-label="${t('common.model')}" required>${choices.length ? choices.map(item => `<option value="${escape(item.id)}">${escape(item.name)}</option>`).join('') : `<option value="">${t('console.publishFirst')}</option>`}</select></label>
+        <label>${t('console.prompt')}<textarea name="prompt" rows="6" placeholder="${playgroundPlaceholder(image)}" ${image ? 'maxlength="4000"' : ''} required></textarea></label>
+        <label id="play-stream" class="checkbox-label" ${image ? 'hidden' : ''}><input type="checkbox" name="stream" checked>${t('common.streamOutput')}</label>
         <fieldset class="play-image-options" id="play-image-options" ${image ? '' : 'hidden disabled'}>
-          <label>期望画幅<select name="aspect_ratio"><option value="">自动</option>${imageAspectRatios.map(ratio => `<option value="${ratio}">${imageRatioLabels[ratio]}</option>`).join('')}</select></label>
-          <label class="checkbox-label"><input type="checkbox" name="transparent_background">请求透明背景</label>
+          <label>${t('console.aspectRatio')}<select name="aspect_ratio"><option value="">${t('console.automatic')}</option>${imageAspectRatios.map(ratio => `<option value="${ratio}">${t(imageRatioLabels[ratio])}</option>`).join('')}</select></label>
+          <label class="checkbox-label"><input type="checkbox" name="transparent_background">${t('console.transparentBackground')}</label>
           <div class="play-references" role="group" aria-labelledby="play-reference-label">
-            <div class="between"><h3 id="play-reference-label">参考图 <small id="play-reference-count" aria-live="polite">0 / ${maxImageReferences}</small></h3>
-              <button type="button" class="small-button" data-action="add-reference">${icon('plus')} 添加图片</button></div>
+            <div class="between"><h3 id="play-reference-label">${t('console.referenceImages')} <small id="play-reference-count" aria-live="polite">0 / ${maxImageReferences}</small></h3>
+              <button type="button" class="small-button" data-action="add-reference">${t('console.addImages', icon('plus'))}</button></div>
             <input type="file" name="image_files" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple hidden>
             <ol class="play-reference-list" id="play-reference-list" hidden></ol>
-            <small id="play-reference-hint">PNG、JPEG 或 WebP</small>
+            <small id="play-reference-hint">${t('console.imageFormats')}</small>
           </div>
         </fieldset>
-        <div class="row"><button class="primary" id="send-button" ${choices.length ? '' : 'disabled'}>${icon('play')} 发送请求</button><button type="button" id="stop-button" data-action="stop" disabled>停止</button></div>
+        <div class="row"><button class="primary" id="send-button" ${choices.length ? '' : 'disabled'}>${t('console.sendRequestButton', icon('play'))}</button><button type="button" id="stop-button" data-action="stop" disabled>${t('common.stop')}</button></div>
       </form>
-      <section class="card"><div class="between"><h2>模型响应</h2><span class="tag" id="response-status">等待请求</span></div>
-        <div class="response empty-output" id="response-output" role="log" aria-live="polite">选择模型并发送请求。</div>
+      <section class="card"><div class="between"><h2>${t('console.modelResponse')}</h2><span class="tag" id="response-status">${t('console.awaitingRequest')}</span></div>
+        <div class="response empty-output" id="response-output" role="log" aria-live="polite">${t('console.responsePlaceholder')}</div>
         <div class="between wrap play-result-footer"><div id="response-meta" class="output-meta"></div>
-          <button type="button" class="small-button" data-action="continue-image" hidden>继续编辑</button></div>
+          <button type="button" class="small-button" data-action="continue-image" hidden>${t('console.continueEditing')}</button></div>
       </section>
     </div>${requestHistory()}${snippet(choices[0])}`;
 }
 function playgroundPlaceholder(image, references = 0) {
-  if (!image) return '你好，用一句话介绍你自己。';
-  if (references > 1) return '例如：保留图 1 的主体，参考图 2 的构图，只替换背景。';
-  if (references === 1) return '例如：保留图 1 的主体，只替换背景。';
-  return '一只蓝色陶瓷杯，浅色背景，居中构图。';
+  if (!image) return t('console.textPromptExample');
+  if (references > 1) return t('console.multipleImagePromptExample');
+  if (references === 1) return t('console.singleImagePromptExample');
+  return t('console.imagePromptExample');
 }
 function renderImageReferences(form) {
   const { references } = playImages.get(form);
   const list = $('#play-reference-list');
   list.hidden = references.length === 0;
-  list.innerHTML = references.map(({ name }, index) => {
-    const label = `图 ${index + 1}`;
+  list.innerHTML = references.map((reference, index) => {
+    const name = reference.generated ? t('console.previousImage') : reference.name;
+    const label = t('console.referenceLabel', index + 1);
     return `<li><img alt=""><div class="play-reference-name"><strong>${label}</strong><small title="${escape(name)}">${escape(name)}</small></div>
-      <div class="row"><button type="button" data-action="move-reference-up" data-index="${index}" aria-label="上移${label}" title="上移${label}" ${index === 0 ? 'disabled' : ''}>${icon('up')}</button>
-      <button type="button" data-action="move-reference-down" data-index="${index}" aria-label="下移${label}" title="下移${label}" ${index === references.length - 1 ? 'disabled' : ''}>${icon('down')}</button>
-      <button type="button" data-action="remove-reference" data-index="${index}" aria-label="移除${label}" title="移除${label}">${icon('close')}</button></div></li>`;
+      <div class="row"><button type="button" data-action="move-reference-up" data-index="${index}" aria-label="${t('console.moveReferenceUp', label)}" title="${t('console.moveReferenceUp', label)}" ${index === 0 ? 'disabled' : ''}>${icon('up')}</button>
+      <button type="button" data-action="move-reference-down" data-index="${index}" aria-label="${t('console.moveReferenceDown', label)}" title="${t('console.moveReferenceDown', label)}" ${index === references.length - 1 ? 'disabled' : ''}>${icon('down')}</button>
+      <button type="button" data-action="remove-reference" data-index="${index}" aria-label="${t('console.removeReference', label)}" title="${t('console.removeReference', label)}">${icon('close')}</button></div></li>`;
   }).join('');
   list.querySelectorAll('img').forEach((node, index) => { node.src = references[index].url; });
   $('#play-reference-count').textContent = `${references.length} / ${maxImageReferences}`;
   form.querySelector('[data-action="add-reference"]').disabled = references.length === maxImageReferences;
-  $('#play-reference-hint').textContent = references.length ? '提示词中可用「图 1」「图 2」指定参考图。' : 'PNG、JPEG 或 WebP';
-  form.elements.prompt.placeholder = playgroundPlaceholder(true, references.length);
+  $('#play-reference-hint').textContent = references.length ? t('console.referencePromptHelp') : t('console.imageFormats');
+  const image = imageModel(state.models.find(item => item.id === form.elements.model.value));
+  form.elements.prompt.placeholder = playgroundPlaceholder(image, image ? references.length : 0);
 }
 function changeImageReferences(button) {
-  const form = $('#play-form'), { references, result } = playImages.get(form);
+  const form = $('#play-form'), draft = playImages.get(form);
+  const { references, result } = draft;
   const action = button.dataset.action;
   if (action === 'continue-image' && result) {
     // Start the next edit from the output. Other references can be added again.
     references.splice(0, references.length, result);
     renderImageReferences(form);
     form.elements.prompt.value = '';
-    form.elements.prompt.placeholder = '描述你想如何编辑图 1。';
+    form.elements.prompt.placeholder = t('console.editPromptExample');
+    draft.editing = true;
     form.elements.prompt.focus();
     return;
   }
@@ -757,7 +852,7 @@ function readImageReference(file, format) {
       const encoded = reader.result.slice(reader.result.indexOf(',') + 1);
       resolve({ name: file.name, size: file.size, url: `data:image/${format};base64,${encoded}` });
     };
-    reader.onerror = () => reject(new Error('无法读取所选图片。'));
+    reader.onerror = () => reject(new Error(t('console.readImageFailed')));
     reader.readAsDataURL(file);
   });
 }
@@ -768,16 +863,16 @@ async function addImageReferences(input) {
   const options = $('#play-image-options');
   const send = $('#send-button'), selector = form.elements.model;
   const existing = draft.references;
-  if (existing.length + files.length > maxImageReferences) throw new Error(`最多添加 ${maxImageReferences} 张参考图。`);
+  if (existing.length + files.length > maxImageReferences) throw new Error(t('console.tooManyReferences', maxImageReferences));
   const formats = files.map(file => {
     const name = file.type ? /^image\/(\w+)$/i.exec(file.type)?.[1] : file.name.split('.').at(-1);
     const subtype = name?.toLowerCase();
     return Object.hasOwn(referenceFormats, subtype) ? referenceFormats[subtype] : null;
   });
-  if (formats.some(format => !format)) throw new Error('请选择 PNG、JPEG 或 WebP 图片。');
-  if (files.some(file => !file.size || file.size > maxImageReferenceBytes)) throw new Error('参考图大小须介于 1 字节和 30 MiB 之间。');
+  if (formats.some(format => !format)) throw new Error(t('console.chooseImageFormat'));
+  if (files.some(file => !file.size || file.size > maxImageReferenceBytes)) throw new Error(t('console.referenceSizeLimit'));
   const total = [...existing, ...files].reduce((size, file) => size + file.size, 0);
-  if (total > maxImageReferenceTotalBytes) throw new Error('参考图合计不能超过 50 MiB。');
+  if (total > maxImageReferenceTotalBytes) throw new Error(t('console.referenceTotalLimit'));
   draft.reading = true;
   options.disabled = send.disabled = selector.disabled = true;
   try {
@@ -794,44 +889,46 @@ async function addImageReferences(input) {
 }
 function requestHistory() {
   const rows = [...state.active.map(row => ({ ...row, status: 'running', durationMs: Date.now() - new Date(row.startedAt).getTime() })), ...state.requests].slice(0, 8);
-  const statuses = { succeeded: '已完成', failed: '失败', cancelled: '已取消', running: '进行中' };
-  return `<div class="section-header"><h2>最近请求</h2><p>仅保留本次网关运行中的元数据，最多 100 条。</p></div>${rows.length ? `<div class="table-wrap"><table><thead><tr><th>模型</th><th>结果</th><th>耗时</th><th>Token 用量</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td><strong>${escape(row.model)}</strong><small>${escape(timestamp(row.startedAt))}</small></td><td><span class="request-status ${row.status}">${statuses[row.status]}</span>${row.errorCode ? `<br><small>${escape(row.errorCode)}</small>` : ''}</td><td>${(row.durationMs / 1000).toFixed(1)}s</td><td>${row.usage ? row.usage.total_tokens.toLocaleString() : '未报告'}</td><td>${row.status === 'running' ? `<button class="small-button" data-action="cancel-request" data-id="${row.id}">取消</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : empty('暂无调用记录', '请求完成后，这里会显示来源、耗时和上游实际报告的 Token 用量。', 'play')}`;
+  const statuses = { succeeded: t('common.completed'), failed: t('common.failed'), cancelled: t('console.cancelled'), running: t('console.inProgress') };
+  return `<div class="section-header"><h2>${t('console.recentRequests')}</h2><p>${t('console.requestHistoryHelp')}</p></div>${rows.length ? `<div class="table-wrap"><table><thead><tr><th>${t('common.model')}</th><th>${t('console.result')}</th><th>${t('console.duration')}</th><th>${t('console.tokenUsage')}</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td><strong>${escape(row.model)}</strong><small>${escape(timestamp(row.startedAt))}</small></td><td><span class="request-status ${row.status}">${statuses[row.status]}</span>${row.errorCode ? `<br><small>${escape(row.errorCode)}</small>` : ''}</td><td>${duration(row.durationMs / 1000)}</td><td>${row.usage ? number(row.usage.total_tokens) : t('console.notReported')}</td><td>${row.status === 'running' ? `<button class="small-button" data-action="cancel-request" data-id="${row.id}">${t('common.cancel')}</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : empty(t('console.noRecentCalls'), t('console.recentCallsHelp'), 'play')}`;
 }
 function exampleCode(choice) {
   const model = choice?.id || 'connection-id/model-id';
   const endpoint = choice?.image ? 'images/generations' : 'chat/completions';
-  const body = choice?.image ? { model, prompt: 'A blue ceramic cup on a light background' } : { model, messages: [{ role: 'user', content: 'Hello!' }] };
+  const body = choice?.image
+    ? { model, prompt: t('docs.imagePrompt') }
+    : { model, messages: [{ role: 'user', content: t('docs.greetingPrompt') }] };
   return `curl ${state.baseUrl}/${endpoint} \\\n  -H "Authorization: Bearer $MODEL_DOCK_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify(body)}'`;
 }
 function snippet(choice = availableChoices()[0]) {
   const code = exampleCode(choice);
-  return `<div class="code-card"><div class="between"><h3>接入示例 · cURL</h3><button class="small-button" data-action="copy-example">${icon('copy')} 复制</button></div><pre id="example-code">${escape(code)}</pre></div>`;
+  return `<div class="code-card"><div class="between"><h3>${t('console.curlExample')}</h3><button class="small-button" data-action="copy-example">${t('console.copyButton', icon('copy'))}</button></div><pre id="example-code">${escape(code)}</pre></div>`;
 }
 function keysPage() {
-  return `<div class="between page-heading"><div><div class="eyebrow">PROJECT ACCESS</div><h1>把能力，交给你的项目。</h1><p>为每个项目创建独立密钥，并限定它可以调用的模型。</p></div><button class="primary" data-action="add-key">${icon('plus')} 创建密钥</button></div><div class="endpoint"><div><h3>网关 Base URL</h3><code>${escape(state.baseUrl)}</code><p>在兼容客户端中配置此地址，API Key 使用下方创建的项目密钥。</p></div><button data-action="copy-endpoint">${icon('copy')} 复制地址</button></div><div class="section-header"><h2>项目密钥 <span class="muted">${state.keys.length}</span></h2></div>${state.keys.length ? `<div class="table-wrap"><table><thead><tr><th>项目</th><th>密钥</th><th>允许范围</th><th>创建时间</th><th></th></tr></thead><tbody>${state.keys.map(key => `<tr><td><strong>${escape(key.name)}</strong></td><td><code>${escape(key.prefix)}…</code></td><td>${key.models.includes('*') ? '<span class="tag blue">所有已发布模型</span>' : key.models.map(model => `<span class="tag">${escape(modelLabel(model))}</span>`).join(' ')}</td><td><small>${escape(timestamp(key.createdAt))}</small></td><td><button class="quiet danger small-button" data-action="delete-key" data-id="${key.id}">撤销</button></td></tr>`).join('')}</tbody></table></div>` : empty('为第一个项目创建密钥', '上游 API Key 留在网关。项目只持有自己的访问密钥，可以随时撤销。', 'key')}<div class="info-box">${icon('info')}<div><strong>后端或本机应用接入</strong>把密钥放在项目的服务端环境变量中。不要写进公开网页脚本。本机网关默认只接受本机调用；远程设备配对将在后续连接器版本提供。</div></div>${snippet()}`;
+  return `<div class="between page-heading"><div><div class="eyebrow">${t('console.projectAccessEyebrow')}</div><h1>${t('console.projectAccessTitle')}</h1><p>${t('console.projectAccessHelp')}</p></div><button class="primary" data-action="add-key">${t('console.createKeyButton', icon('plus'))}</button></div><div class="endpoint"><div><h3>${t('console.gatewayBaseUrl')}</h3><code>${escape(state.baseUrl)}</code><p>${t('console.gatewayBaseUrlHelp')}</p></div><button data-action="copy-endpoint">${t('console.copyAddressButton', icon('copy'))}</button></div><div class="section-header"><h2>${t('common.projectKey')} <span class="muted">${state.keys.length}</span></h2></div>${state.keys.length ? `<div class="table-wrap"><table><thead><tr><th>${t('console.project')}</th><th>${t('console.key')}</th><th>${t('console.keyScope')}</th><th>${t('console.createdAt')}</th><th></th></tr></thead><tbody>${state.keys.map(key => `<tr><td><strong>${escape(key.name)}</strong></td><td><code>${escape(key.prefix)}…</code></td><td>${key.models.includes('*') ? `<span class="tag blue">${t('console.allPublished')}</span>` : key.models.map(model => `<span class="tag">${escape(modelLabel(model))}</span>`).join(' ')}</td><td><small>${escape(timestamp(key.createdAt))}</small></td><td><button class="quiet danger small-button" data-action="delete-key" data-id="${key.id}">${t('console.revoke')}</button></td></tr>`).join('')}</tbody></table></div>` : empty(t('console.firstProjectKey'), t('console.firstProjectKeyHelp'), 'key')}<div class="info-box">${icon('info')}<div><strong>${t('console.localAppConnection')}</strong>${t('console.projectKeyHandling')}</div></div>${snippet()}`;
 }
 function showDialog(title, description, fields, submitLabel, callback) {
   const dialog = $('#dialog');
-  dialog.innerHTML = `<div class="modal-heading"><h2 id="dialog-title">${escape(title)}</h2><p>${escape(description)}</p></div><form id="modal-form" class="modal-form">${fields}<div class="form-error" id="modal-error" role="alert"></div><div class="modal-actions"><button type="button" data-action="close-dialog">取消</button><button class="primary" type="submit">${escape(submitLabel)}</button></div></form>`;
+  dialog.innerHTML = `<div class="modal-heading"><h2 id="dialog-title">${escape(title)}</h2><p>${escape(description)}</p></div><form id="modal-form" class="modal-form">${fields}<div class="form-error" id="modal-error" role="alert"></div><div class="modal-actions"><button type="button" data-action="close-dialog">${t('common.cancel')}</button><button class="primary" type="submit">${escape(submitLabel)}</button></div></form>`;
   $('#modal-form').addEventListener('submit', async event => {
     event.preventDefault(); const button = event.submitter; button.disabled = true; $('#modal-error').textContent = '';
     try { await callback(new FormData(event.target)); }
-    catch (error) { if ($('#modal-error')) $('#modal-error').textContent = error.message; }
+    catch (error) { if ($('#modal-error')) $('#modal-error').textContent = errorText(error); }
     finally { button.disabled = false; }
   });
   if (!dialog.open) dialog.showModal();
 }
 function connectionDialog(typeId, existing) {
-  const type = types[typeId];
-  showDialog(existing ? '编辑连接' : `添加 ${type.name}`, typeId === 'codex' ? '使用本机已安装并登录的 Codex CLI。此适配器用于个人本机接入。' : '连接保存后，点击“发现模型”获取目录。', `
-    <label>连接名称<input name="name" value="${escape(existing?.name || type.defaultName)}" required maxlength="100"></label>
-    ${typeId !== 'codex' ? `<label>Base URL<input type="url" name="baseUrl" value="${escape(existing?.baseUrl || type.baseUrl)}" required><small>${typeId === 'openai' ? '填写 API 基础地址，例如包含 /v1 的地址。' : '填写 Ollama 服务地址，不需要 /api 或 /v1。'}</small></label><label>API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="${existing?.hasKey ? '已保存；留空保留原密钥' : typeId === 'ollama' ? '本机 Ollama 通常无需密钥' : '输入自己的 API Key'}">${existing?.hasKey ? '<small>如需移除原密钥，勾选下方选项。</small>' : ''}</label>${existing?.hasKey ? '<label class="checkbox-label"><input type="checkbox" name="clearKey">移除已保存的 API Key</label>' : ''}` : '<div class="info-box">仅启动受限的本机 App Server。宿主 Shell、浏览器、插件与 MCP 工具不会提供给 API 调用方。</div>'}
-    <div class="form-grid"><label>最大并发<input name="maxConcurrency" type="number" min="1" max="${typeId === 'codex' ? '1' : '16'}" value="${existing?.maxConcurrency || (typeId === 'codex' ? 1 : 2)}" required></label><label>请求超时（秒）<input name="timeoutSeconds" type="number" min="5" max="1800" value="${existing?.timeoutSeconds || 600}" required></label></div>
-    <label class="checkbox-label"><input name="enabled" type="checkbox" ${existing?.enabled !== false ? 'checked' : ''}>启用此连接</label>`, '保存连接', async form => {
+  const type = providerType(typeId);
+  showDialog(existing ? t('console.editConnection') : t('console.addConnectionTitle', type.name), typeId === 'codex' ? t('console.codexConnectionHelp') : t('console.connectionDiscoveryHelp'), `
+    <label>${t('console.connectionName')}<input name="name" value="${escape(existing?.name || type.defaultName)}" required maxlength="100"></label>
+    ${typeId !== 'codex' ? `<label>Base URL<input type="url" name="baseUrl" value="${escape(existing?.baseUrl || type.baseUrl)}" required><small>${typeId === 'openai' ? t('console.apiBaseUrlHelp') : t('console.ollamaBaseUrlHelp')}</small></label><label>API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="${existing?.hasKey ? t('console.keepExistingKey') : typeId === 'ollama' ? t('console.ollamaKeyHelp') : t('console.enterProviderKey')}">${existing?.hasKey ? `<small>${t('console.removeKeyHelp')}</small>` : ''}</label>${existing?.hasKey ? `<label class="checkbox-label"><input type="checkbox" name="clearKey">${t('console.removeSavedKey')}</label>` : ''}` : `<div class="info-box">${t('console.codexIsolationHelp')}</div>`}
+    <div class="form-grid"><label>${t('console.maxConcurrency')}<input name="maxConcurrency" type="number" min="1" max="${typeId === 'codex' ? '1' : '16'}" value="${existing?.maxConcurrency || (typeId === 'codex' ? 1 : 2)}" required></label><label>${t('console.requestTimeout')}<input name="timeoutSeconds" type="number" min="5" max="1800" value="${existing?.timeoutSeconds || 600}" required></label></div>
+    <label class="checkbox-label"><input name="enabled" type="checkbox" ${existing?.enabled !== false ? 'checked' : ''}>${t('console.enableConnection')}</label>`, t('console.saveConnection'), async form => {
     const input = { type: typeId, name: form.get('name'), enabled: form.has('enabled'), maxConcurrency: Number(form.get('maxConcurrency')), timeoutSeconds: Number(form.get('timeoutSeconds')) };
     if (typeId !== 'codex') { input.baseUrl = form.get('baseUrl'); if (form.get('apiKey') || form.has('clearKey') || !existing) input.apiKey = form.has('clearKey') ? '' : form.get('apiKey'); }
     await mutate(`/admin/connections${existing ? `/${existing.id}` : ''}`, existing ? 'PATCH' : 'POST', input);
-    $('#dialog').close(); render(); toast('连接已保存。可点击“发现模型”获取目录。');
+    $('#dialog').close(); render(); toast(t('console.connectionSaved'));
   });
 }
 async function generate(form) {
@@ -858,71 +955,87 @@ async function generate(form) {
   draft.result = null;
   const output = $('#response-output'); output.classList.remove('empty-output'); output.textContent = '';
   output.classList.toggle('image-output', image);
-  $('#response-status').textContent = image ? '生成图片中' : '请求中';
-  $('#response-meta').textContent = '正在等待模型响应…';
-  let measurement, imageMeta, content = '', ended = false; const started = performance.now();
+  $('#response-status').textContent = image ? t('console.generatingImage') : t('console.requestInProgress');
+  $('#response-meta').textContent = t('console.waitingForModel');
+  let measurement, imageMeta, failure, status = 'common.completed', content = '', ended = false;
+  const started = performance.now();
   try {
     const endpoint = image ? '/v1/images/generations' : '/v1/chat/completions';
     const response = await fetch(endpoint, { method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
-    if (!response.ok) { const data = await response.json(); throw new Error(data.error?.message || '请求失败'); }
+    if (!response.ok) { const data = await response.json(); throw data.error || new LocalizedError('common.requestFailed'); }
     if (image) {
       const result = await response.json();
       const { b64_json: b64, width, height } = result.data?.[0] || {};
       if (!['png', 'jpeg', 'webp'].includes(result.output_format) || typeof b64 !== 'string' || !b64) {
-        throw new Error('网关没有返回有效图片。');
+        throw new LocalizedError('console.invalidImageResult');
       }
       const preview = document.createElement('img');
-      preview.alt = '生成的图片';
+      preview.alt = t('console.generatedImage');
       const url = `data:image/${result.output_format};base64,${b64}`;
       preview.src = url;
       await preview.decode();
       controller.signal.throwIfAborted();
       const size = b64.length / 4 * 3 - (b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0);
-      draft.result = { name: '上一次生成结果', size, url };
-      imageMeta = `${width || preview.naturalWidth} × ${height || preview.naturalHeight} · ${result.output_format.toUpperCase()}`;
+      draft.result = { generated: true, size, url };
+      imageMeta = { width: width || preview.naturalWidth, height: height || preview.naturalHeight, format: result.output_format.toUpperCase() };
       output.append(preview);
       continueButton.hidden = false;
     } else if (streaming) {
       for await (const data of sse(response.body)) {
         if (data === '[DONE]') { ended = true; break; }
-        const chunk = JSON.parse(data); if (chunk.error) throw new Error(chunk.error.message);
+        const chunk = JSON.parse(data); if (chunk.error) throw chunk.error;
         content += chunk.choices?.[0]?.delta?.content || ''; output.textContent = content; output.scrollTop = output.scrollHeight;
         if (chunk.usage) measurement = chunk.usage;
       }
-      if (!ended) throw new Error('响应流未正常结束。');
+      if (!ended) throw new LocalizedError('common.streamIncomplete');
     } else {
       const data = await response.json(); content = data.choices?.[0]?.message?.content || ''; output.textContent = content; measurement = data.usage;
     }
-    $('#response-status').textContent = '已完成';
   } catch (error) {
-    $('#response-status').textContent = controller.signal.aborted ? '已停止' : '失败';
-    if (!controller.signal.aborted) { output.textContent = content ? `${content}\n\n请求失败：${error.message}` : error.message; toast(error.message, true); }
+    status = controller.signal.aborted ? 'common.stopped' : 'common.failed';
+    if (!controller.signal.aborted) { failure = error; toast(errorText(error), true); }
   } finally {
     generation = null; form.elements.model.disabled = false; $('#send-button').disabled = false; $('#stop-button').disabled = true;
     $('#play-image-options').disabled = !image;
-    const duration = `${((performance.now() - started) / 1000).toFixed(1)} 秒`;
-    $('#response-meta').textContent = image ? [imageMeta, duration].filter(Boolean).join(' · ')
-      : `${duration} · ${measurement ? `输入 ${measurement.prompt_tokens} / 输出 ${measurement.completion_tokens} tokens` : '上游未报告用量'}`;
-    if (image && controller.signal.aborted) output.textContent = '请求已停止。';
+    draft.response = { status, seconds: (performance.now() - started) / 1000, usage: measurement, image: imageMeta, content, failure, imageRequest: image };
+    showPlayResponse(draft.response, output);
     try { await load(false); } catch {}
   }
 }
+function showPlayResponse(response, output = $('#response-output')) {
+  const { status, imageRequest, image, content, failure, seconds } = response;
+  $('#response-status').textContent = t(status);
+  $('#response-meta').textContent = imageRequest && !image ? duration(seconds) : requestMetadata(response);
+  output.classList.remove('empty-output');
+  output.classList.toggle('image-output', imageRequest);
+  if (failure) {
+    const message = errorText(failure);
+    output.textContent = content ? t('console.partialResponseFailure', content, message) : message;
+  } else if (!image) {
+    output.textContent = imageRequest && status === 'common.stopped' ? t('console.requestStopped') : content;
+  }
+}
+
+function updatePlayModel(form) {
+  const model = state.models.find(item => item.id === form.elements.model.value);
+  const image = imageModel(model);
+  const draft = playImages.get(form);
+  $('#play-image-options').hidden = $('#play-image-options').disabled = !image;
+  $('#play-stream').hidden = image;
+  $('[data-action="continue-image"]').hidden = !image || !draft.result;
+  form.elements.prompt.placeholder = playgroundPlaceholder(image, image ? draft.references.length : 0);
+  if (image) form.elements.prompt.maxLength = 4000;
+  else form.elements.prompt.removeAttribute('maxlength');
+  $('#example-code').textContent = exampleCode({ id: form.elements.model.value, image });
+}
 document.addEventListener('change', event => {
   if (event.target.matches('#play-form [name="image_files"]')) {
-    void addImageReferences(event.target).catch(error => toast(error.message, true));
+    void addImageReferences(event.target).catch(error => toast(errorText(error), true));
     return;
   }
   if (!event.target.matches('#play-form select[name="model"]')) return;
-  const model = state.models.find(item => item.id === event.target.value);
-  const image = imageModel(model);
-  const prompt = event.target.form.elements.prompt;
-  $('#play-image-options').hidden = $('#play-image-options').disabled = !image;
-  $('#play-stream').hidden = image;
-  $('[data-action="continue-image"]').hidden = !image || !playImages.get(event.target.form).result;
-  prompt.placeholder = playgroundPlaceholder(image, image ? playImages.get(event.target.form).references.length : 0);
-  if (image) prompt.maxLength = 4000;
-  else prompt.removeAttribute('maxlength');
-  $('#example-code').textContent = exampleCode({ id: event.target.value, image });
+  playImages.get(event.target.form).editing = false;
+  updatePlayModel(event.target.form);
 });
 document.addEventListener('input', event => {
   if (event.target.id !== 'catalog-search') return;
@@ -976,7 +1089,7 @@ document.addEventListener('submit', async event => {
       rememberSettings();
     }
     manualToken = token = nextToken;
-    try { await load(); sessionStorage.setItem(manualTokenKey, manualToken); } catch (error) { login(error.message, true); }
+    try { await load(); sessionStorage.setItem(manualTokenKey, manualToken); } catch (error) { login(error, true); }
   } else if (event.target.id === 'play-form') { event.preventDefault(); void generate(event.target); }
 });
 document.addEventListener('click', async event => {
@@ -984,14 +1097,15 @@ document.addEventListener('click', async event => {
   if (more && !more.contains(event.target)) more.open = false;
   if (event.target.closest('[data-mm]')) return;
   const button = event.target.closest('button'); if (!button || button.disabled) return;
+  if (button.dataset.language) { changeLanguage(button.dataset.language); return; }
   if (button.dataset.view) {
-    if (generation) { toast('请先停止或等待当前请求。'); return; }
+    if (generation) { toast(t('common.waitForRequest')); return; }
     view = button.dataset.view; history.pushState(null, '', `${location.pathname}?view=${view}`); render(); return;
   }
   const action = button.dataset.action, id = button.dataset.id;
   if (!action) return;
   if ((busy || catalogRefresh) && !['close-dialog', 'stop', 'catalog-filter', 'model-details'].includes(action)) {
-    return toast('正在处理，请稍候。');
+    return toast(t('common.busy'));
   }
   try {
     if (action === 'add-reference') { button.form.elements.image_files.click(); return; }
@@ -1000,9 +1114,9 @@ document.addEventListener('click', async event => {
       return;
     }
     if (action === 'close-dialog') $('#dialog').close();
-    if (action === 'refresh') { await load(); toast('状态已刷新。'); }
+    if (action === 'refresh') { await load(); toast(t('console.statusRefreshed')); }
     if (action === 'logout') {
-      if (generation) { toast('请先停止或等待当前请求。'); return; }
+      if (generation) { toast(t('common.waitForRequest')); return; }
       const sessions = new Set([readConsoleSession(), consoleSession].filter(Boolean));
       if (sessions.size) {
         busy = true;
@@ -1022,9 +1136,9 @@ document.addEventListener('click', async event => {
       state = null;
       login();
     }
-    if (action === 'copy-endpoint') { await navigator.clipboard.writeText(state.baseUrl); toast('地址已复制。'); }
-    if (action === 'copy-example') { await navigator.clipboard.writeText($('#example-code').textContent); toast('接入示例已复制。'); }
-    if (action === 'copy-api-example') { await navigator.clipboard.writeText(document.getElementById(button.dataset.codeId).textContent); toast('接口示例已复制。'); }
+    if (action === 'copy-endpoint') { await navigator.clipboard.writeText(state.baseUrl); toast(t('common.addressCopied')); }
+    if (action === 'copy-example') { await navigator.clipboard.writeText($('#example-code').textContent); toast(t('console.connectionExampleCopied')); }
+    if (action === 'copy-api-example') { await navigator.clipboard.writeText(document.getElementById(button.dataset.codeId).textContent); toast(t('common.apiExampleCopied')); }
     if (action === 'add-connection') {
       if (more?.contains(button)) {
         more.open = false;
@@ -1043,7 +1157,7 @@ document.addEventListener('click', async event => {
     if (action === 'revert-publication') {
       settingsDraft = undefined;
       settingsError = '';
-      catalogNotice = '已撤销未保存的更改';
+      catalogNotice = 'console.draftDiscarded';
       rememberSettings();
       render();
     }
@@ -1058,31 +1172,31 @@ document.addEventListener('click', async event => {
       const models = state.models.filter(item => item.connectionId === model.connectionId);
       const health = connectionHealth(connection, models);
       const lastCall = recentModelCall(model.connectionId, model.nativeId);
-      const formatTokens = value => Number.isSafeInteger(value) && value > 0 ? `${value.toLocaleString('en-US')} tokens` : null;
+      const formatTokens = value => Number.isSafeInteger(value) && value > 0 ? `${number(value)} tokens` : null;
       const fields = [
-        ['凭证 / 服务', connection?.name],
-        ['模型 ID', model.nativeId],
-        ['网关模型 ID', model.id],
-        ['模型能力', modelTags(model).join('、')],
-        ['连接状态', [health.label, health.detail].filter(Boolean).join(' · ')],
-        ['上次检测', connection?.checkedAt ? timestamp(connection.checkedAt) : null],
-        ...(lastCall ? [['最近调用', `${lastCall.status === 'succeeded' ? '成功' : '失败'} · ${timestamp(lastCall.startedAt)}`]] : []),
-        ['最大输入', formatTokens(model.maxInputTokens)],
-        ['最大输出', formatTokens(model.maxOutputTokens)],
-        ['上下文窗口', formatTokens(model.contextWindow)],
-        ['开放的思考深度', allowed.join('、')],
-        ['默认思考深度', defaultEffort || (allowed.length ? '由上游决定' : null)]
+        [t('common.credentialService'), connection?.name],
+        [t('common.modelId'), model.nativeId],
+        [t('console.gatewayModelId'), model.id],
+        [t('console.modelCapabilities'), modelTags(model).join(languageSeparator())],
+        [t('console.connectionStatus'), [health.label, health.detail].filter(Boolean).join(' · ')],
+        [t('console.lastCheckLabel'), connection?.checkedAt ? timestamp(connection.checkedAt) : null],
+        ...(lastCall ? [[t('console.lastRequest'), `${lastCall.status === 'succeeded' ? t('console.succeeded') : t('common.failed')} · ${timestamp(lastCall.startedAt)}`]] : []),
+        [t('console.maxInput'), formatTokens(model.maxInputTokens)],
+        [t('console.maxOutput'), formatTokens(model.maxOutputTokens)],
+        [t('console.contextWindow'), formatTokens(model.contextWindow)],
+        [t('common.allowedEfforts'), allowed.join(languageSeparator())],
+        [t('common.defaultEffort'), defaultEffort || (allowed.length ? t('console.providerDefault') : null)]
       ];
       const details = `<dl class="catalog-details">${fields.map(([label, value]) => `<dt>${label}</dt><dd>${escape(value || catalogDash)}</dd>`).join('')}</dl>`;
-      const recovery = canClearEfforts ? '<p class="catalog-warning">思考深度设置已失效。清除后，点击「保存更改」生效。</p>' : '';
-      showDialog('模型详情', model.name, details + recovery, canClearEfforts ? '清除失效设置' : '关闭', async () => {
+      const recovery = canClearEfforts ? `<p class="catalog-warning">${t('console.invalidEffortHelp')}</p>` : '';
+      showDialog(t('console.modelDetails'), model.name, details + recovery, canClearEfforts ? t('console.clearInvalidEfforts') : t('common.close'), async () => {
         $('#dialog').close();
         if (canClearEfforts) changeModelSettings(model, { reasoningPolicy: null });
       });
     }
     if (action === 'discover') {
       const revision = state.revision;
-      button.disabled = true; button.textContent = '正在发现…';
+      button.disabled = true; button.textContent = t('console.discovering');
       try {
         await mutate(`/admin/connections/${encodeURIComponent(id)}/discover`, 'POST');
       } catch (error) {
@@ -1092,10 +1206,10 @@ document.addEventListener('click', async event => {
         throw error;
       }
       advanceSettingsDraft(revision);
-      render(); toast('目录已更新，新模型需要手动发布。');
+      render(); toast(t('console.discoveryComplete'));
     }
-    if (action === 'add-model') showDialog('手动添加模型', '适用于未提供模型列表接口的 API。请填写供应商实际支持的模型 ID。', '<label>模型 ID<input name="nativeId" placeholder="供应商模型 ID" required></label><label>显示名称（可选）<input name="name" placeholder="便于识别的名称"></label>', '添加模型', async form => {
-      await mutate('/admin/models', 'POST', { connectionId: id, ...Object.fromEntries(form) }); $('#dialog').close(); render(); toast('模型已添加，请手动发布。');
+    if (action === 'add-model') showDialog(t('console.registerModel'), t('console.manualModelHelp'), `<label>${t('common.modelId')}<input name="nativeId" placeholder="${t('console.providerModelId')}" required></label><label>${t('console.optionalDisplayName')}<input name="name" placeholder="${t('console.displayNamePlaceholder')}"></label>`, t('console.addModel'), async form => {
+      await mutate('/admin/models', 'POST', { connectionId: id, ...Object.fromEntries(form) }); $('#dialog').close(); render(); toast(t('console.modelAdded'));
     });
     if (['publish-model', 'toggle-model-effort', 'pin-model-effort'].includes(action)) {
       const model = state.models.find(item => item.id === id);
@@ -1111,33 +1225,32 @@ document.addEventListener('click', async event => {
       await saving;
       settingsDraft = undefined;
       settingsError = '';
-      catalogNotice = '全部更改已保存';
+      catalogNotice = 'console.allChangesSaved';
       rememberSettings();
       render();
     }
     if (action === 'add-key') {
       const choices = availableChoices();
-      showDialog('创建项目访问密钥', '密钥只显示一次。默认仅授予你选择的模型。', `<label>项目名称<input name="name" placeholder="例如：我的聊天 demo" required></label><label>允许调用</label><div class="checklist">${choices.map(item => `<label class="checkbox-label"><input type="checkbox" name="models" value="${escape(item.id)}">${escape(item.name)}</label>`).join('')}<label class="checkbox-label"><input type="checkbox" name="models" value="*">所有已发布的模型（含以后新增）</label></div>`, '创建密钥', async form => {
+      showDialog(t('console.createKeyTitle'), t('console.createKeyHelp'), `<label>${t('console.projectName')}<input name="name" placeholder="${t('console.projectNameExample')}" required></label><label>${t('console.authorizedModels')}</label><div class="checklist">${choices.map(item => `<label class="checkbox-label"><input type="checkbox" name="models" value="${escape(item.id)}">${escape(item.name)}</label>`).join('')}<label class="checkbox-label"><input type="checkbox" name="models" value="*">${t('console.allPublishedFuture')}</label></div>`, t('console.createKey'), async form => {
         const result = await mutate('/admin/keys', 'POST', { name: form.get('name'), models: form.getAll('models') });
         $('#dialog').close(); render();
-        showDialog('保存你的项目密钥', '复制到项目的服务端环境变量。关闭后将无法再次查看。', `<div class="token-box"><code id="new-token">${escape(result.token)}</code></div><button type="button" data-action="copy-token">${icon('copy')} 复制密钥</button>`, '我已保存', async () => { $('#dialog').close(); });
+        showDialog(t('console.saveNewKey'), t('console.saveNewKeyHelp'), `<div class="token-box"><code id="new-token">${escape(result.token)}</code></div><button type="button" data-action="copy-token">${t('console.copyKeyButton', icon('copy'))}</button>`, t('console.confirmKeySaved'), async () => { $('#dialog').close(); });
       });
     }
-    if (action === 'copy-token') { await navigator.clipboard.writeText($('#new-token').textContent); toast('项目密钥已复制。'); }
+    if (action === 'copy-token') { await navigator.clipboard.writeText($('#new-token').textContent); toast(t('console.projectKeyCopied')); }
     if (['delete-connection', 'delete-key'].includes(action)) {
       const key = action === 'delete-key';
-      showDialog(key ? '撤销项目密钥' : '移除此连接', key ? '使用此密钥的项目将失去访问权限，正在进行的请求也会被取消。' : '会移除此连接的模型与凭证。应用的已有模型选择将不可用，本机模型文件会保留。', '', '确认操作', async () => {
-        await mutate(`/admin/${key ? 'keys' : 'connections'}/${encodeURIComponent(id)}`, 'DELETE'); $('#dialog').close(); render(); toast('操作已完成。');
+      showDialog(key ? t('console.revokeKey') : t('console.removeConnection'), key ? t('console.revokeKeyHelp') : t('console.removeConnectionHelp'), '', t('console.confirmAction'), async () => {
+        await mutate(`/admin/${key ? 'keys' : 'connections'}/${encodeURIComponent(id)}`, 'DELETE'); $('#dialog').close(); render(); toast(t('console.actionComplete'));
       });
     }
     if (action === 'stop') generation?.abort();
-    if (action === 'cancel-request') { await api(`/admin/requests/${id}/cancel`, { method: 'POST', body: {} }); await load(); toast('已发送取消请求。'); }
+    if (action === 'cancel-request') { await api(`/admin/requests/${id}/cancel`, { method: 'POST', body: {} }); await load(); toast(t('console.cancellationSent')); }
   } catch (error) {
     if (action === 'save-publication') {
-      const message = error.code === 'reasoning_policy_conflict' ? '有旧别名或分组仍在使用被关闭的思考深度。请保留该深度后再保存。' : error.message;
-      settingsError = `${message} 未保存的更改已保留。`;
+      settingsError = error.code === 'reasoning_policy_conflict' ? ['console.reasoningConflictWithDraft'] : ['console.settingsErrorWithDraft', error];
     }
-    toast(error.message, true);
+    toast(errorText(error), true);
     if (['discover', 'save-publication'].includes(action)) render();
   }
   finally { button.disabled = false; }
@@ -1149,8 +1262,8 @@ try {
   else login();
 } catch (error) {
   if (token && fragment.has('session') && error.code === 'console_link_expired') {
-    try { await load(); } catch (loadError) { login(loadError.message); }
-  } else login(error.message);
+    try { await load(); } catch (loadError) { login(loadError); }
+  } else login(error);
 }
 const refreshTimer = setInterval(async () => {
   if (!token || !state || busy || catalogRefresh || generation || $('#dialog').open || document.visibilityState !== 'visible' || view === 'playground') return;

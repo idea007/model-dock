@@ -15,7 +15,11 @@ const files = new Map([
   ['/assets/events.mjs', ['../../packages/protocol/events.mjs', 'text/javascript']],
   ['/assets/image-options.mjs', ['../../packages/protocol/image-options.mjs', 'text/javascript']],
   ['/assets/api-docs.mjs', ['../console/api-docs.mjs', 'text/javascript']],
-  ['/assets/api-docs.css', ['../console/api-docs.css', 'text/css']]
+  ['/assets/api-docs.css', ['../console/api-docs.css', 'text/css']],
+  ['/packages/ui/i18n.mjs', ['../../packages/ui/i18n.mjs', 'text/javascript']],
+  ['/packages/ui/messages.mjs', ['../../packages/ui/messages.mjs', 'text/javascript']],
+  ['/packages/ui/feature-labels.mjs', ['../../packages/ui/feature-labels.mjs', 'text/javascript']],
+  ['/assets/i18n.css', ['../../packages/ui/i18n.css', 'text/css']]
 ]);
 const json = (response, status, value) => { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)); };
 const hash = value => createHash('sha256').update(value).digest();

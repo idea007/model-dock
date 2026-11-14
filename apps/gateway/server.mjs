@@ -18,6 +18,9 @@ const staticFiles = new Map([
   ['/assets/models.css', [path.join(directory, '../console/models.css'), 'text/css; charset=utf-8']],
   ['/assets/api-docs.mjs', [path.join(directory, '../console/api-docs.mjs'), 'text/javascript; charset=utf-8']],
   ['/assets/api-docs.css', [path.join(directory, '../console/api-docs.css'), 'text/css; charset=utf-8']],
+  ['/packages/ui/i18n.mjs', [path.join(directory, '../../packages/ui/i18n.mjs'), 'text/javascript; charset=utf-8']],
+  ['/packages/ui/messages.mjs', [path.join(directory, '../../packages/ui/messages.mjs'), 'text/javascript; charset=utf-8']],
+  ['/assets/i18n.css', [path.join(directory, '../../packages/ui/i18n.css'), 'text/css; charset=utf-8']],
   ['/assets/events.mjs', [path.join(directory, '../../packages/protocol/events.mjs'), 'text/javascript; charset=utf-8']],
   ['/assets/image-options.mjs', [path.join(directory, '../../packages/protocol/image-options.mjs'), 'text/javascript; charset=utf-8']]
 ]);

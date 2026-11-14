@@ -22,7 +22,7 @@ try {
   app = await startGateway({ directory: path.join(temporary, 'data'), port: 0, providers: { openai: {
     async *generate() { yield { type: 'delta', delta: { content: 'Package smoke response' } }; yield { type: 'done', finishReason: 'stop' }; }
   } } });
-  for (const endpoint of ['/', '/assets/app.mjs', '/assets/style.css', '/assets/models.css', '/assets/api-docs.mjs', '/assets/api-docs.css', '/assets/events.mjs', '/assets/image-options.mjs', '/healthz']) {
+  for (const endpoint of ['/', '/assets/app.mjs', '/assets/style.css', '/assets/models.css', '/assets/api-docs.mjs', '/assets/api-docs.css', '/assets/events.mjs', '/assets/image-options.mjs', '/assets/i18n.css', '/packages/ui/i18n.mjs', '/packages/ui/messages.mjs', '/healthz']) {
     const response = await fetch(app.origin + endpoint);
     if (!response.ok) throw new Error(`Installed artifact missing ${endpoint}`);
     await response.arrayBuffer();
@@ -31,7 +31,7 @@ try {
   if (!demoHelp.stdout.includes('client app') || demoHelp.stdout.includes('--mock')) throw new Error('Installed demo CLI failed.');
   const { startDemo } = await import(pathToFileURL(path.join(installed, 'apps/demo/server.mjs')));
   demo = await startDemo({ directory: path.join(temporary, 'demo-data'), port: 0 });
-  for (const endpoint of ['/', '/assets/app.mjs', '/assets/base.css', '/assets/models.css', '/assets/models.mjs', '/assets/demo.css', '/assets/events.mjs', '/assets/api-docs.mjs', '/assets/api-docs.css', '/assets/image-options.mjs', '/healthz']) {
+  for (const endpoint of ['/', '/assets/app.mjs', '/assets/base.css', '/assets/models.css', '/assets/models.mjs', '/assets/demo.css', '/assets/events.mjs', '/assets/api-docs.mjs', '/assets/api-docs.css', '/assets/image-options.mjs', '/assets/i18n.css', '/packages/ui/i18n.mjs', '/packages/ui/messages.mjs', '/packages/ui/feature-labels.mjs', '/healthz']) {
     const response = await fetch(demo.origin + endpoint);
     if (!response.ok) throw new Error(`Installed demo artifact missing ${endpoint}`);
     await response.arrayBuffer();

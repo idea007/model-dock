@@ -106,7 +106,9 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
     .replace("'./models.mjs'", JSON.stringify(new URL('../apps/demo/models.mjs', import.meta.url).href))
     .replace("'./events.mjs'", JSON.stringify(new URL('../packages/protocol/events.mjs', import.meta.url).href))
     .replace("'./api-docs.mjs'", JSON.stringify(new URL('../apps/console/api-docs.mjs', import.meta.url).href))
-    .replace("'./image-options.mjs'", JSON.stringify(new URL('../packages/protocol/image-options.mjs', import.meta.url).href));
+    .replace("'./image-options.mjs'", JSON.stringify(new URL('../packages/protocol/image-options.mjs', import.meta.url).href))
+    .replace("'../../packages/ui/i18n.mjs'", JSON.stringify(new URL('../packages/ui/i18n.mjs', import.meta.url).href))
+    .replace("'../../packages/ui/feature-labels.mjs'", JSON.stringify(new URL('../packages/ui/feature-labels.mjs', import.meta.url).href));
   const open = async () => { module = await import(`data:text/javascript;base64,${Buffer.from(source + `\n// ${entry}:${requests.length}`).toString('base64')}`); };
   const document = win.document;
   const click = selector => { const node = document.querySelector(selector); assert.ok(node, selector); node.click(); };
@@ -125,6 +127,11 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
     click('[data-api-id="chat"] summary');
     assert.ok(document.querySelector('[data-api-id="chat"]').open);
     assert.ok(document.querySelector('#api-code-chat-request').textContent.includes('connection-id/model-id'));
+    click('.sidebar-bottom [data-language="en"]');
+    assert.equal(document.querySelector('h1').textContent, 'API documentation');
+    assert.ok(document.querySelector('[data-api-id="chat"]').open);
+    assert.match(document.querySelector('[data-api-id="chat"]').textContent, /Request parameters/);
+    click('.sidebar-bottom [data-language="zh-CN"]');
     click('.api-authorization [data-view="settings"]');
   } else if (entry !== '?view=settings') {
     assert.equal(document.querySelector('#connection-form'), null);
@@ -138,6 +145,15 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
   await until(() => document.querySelector('#connection-form .form-error')?.textContent.includes('HTTP 401'));
   assert.equal(f.app.store.read().connection, null);
   assert.equal(document.querySelector('#connection-form button').disabled, false);
+  if (entry === '?view=settings') {
+    click('.sidebar-bottom [data-language="en"]');
+    assert.equal(document.documentElement.lang, 'en');
+    assert.equal(document.querySelector('h1').textContent, 'Connection settings');
+    assert.equal(document.querySelector('[name="baseUrl"]').value, f.mock.connection.baseUrl);
+    assert.equal(document.querySelector('[name="apiKey"]').value, 'md_key_invalid');
+    assert.match(document.querySelector('#connection-form .form-error').textContent, /Could not load the authorized catalog/);
+    click('.sidebar-bottom [data-language="zh-CN"]');
+  }
   fill('apiKey', `  ${key.token}  `); submit('#connection-form');
   await until(() => document.querySelector('.mode-badge').textContent === '已连接服务端' && !document.querySelector('[name="apiKey"]').value);
   assert.match(document.querySelector('.mode-badge').textContent, /已连接服务端/);
@@ -169,11 +185,19 @@ for (const [entry, heading] of Object.entries(clientPages)) test(`client page ${
   await until(() => document.querySelector('#catalog-summary').textContent.includes('0 个') && !document.querySelector('[data-action="refresh-models"]').disabled);
   assert.equal(f.app.store.read().catalog[0].available, false);
   await f.mock.app.gateway.updateModel(model.id, { revision: f.mock.app.store.read().revision, enabled: true });
+  if (entry === '?view=settings') {
+    click('[data-language="en"]');
+    assert.equal(win.localStorage.getItem('model-dock-language'), 'en');
+  }
   module.dispose(); await open();
   assert.ok(document.querySelector('#connection-form')); assert.ok(document.querySelector('.shell'));
   assert.equal(document.querySelector('.nav [aria-current="page"]').dataset.view, 'settings');
-  assert.match(document.querySelector('#catalog-summary').textContent, /1 个/);
   assert.ok(f.app.store.read().catalog[0].available, 'reloading the client requests the current server catalog');
+  if (entry === '?view=settings') {
+    assert.equal(document.documentElement.lang, 'en');
+    assert.equal(document.querySelector('.mode-badge').textContent, 'Connected to server');
+    assert.equal(document.querySelector('[data-language="en"]').getAttribute('aria-pressed'), 'true');
+  } else assert.match(document.querySelector('#catalog-summary').textContent, /1 个/);
   assert.equal(requests.filter(url => url === '/api/session').length, 2);
   assert.ok(requests.every(url => url.startsWith('/api/')), 'the browser only calls its own client backend');
 });

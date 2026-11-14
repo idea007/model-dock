@@ -1,4 +1,6 @@
 // Framework-independent model settings, adapted from the reference capability manager.
+import { errorText, number, t } from '../../packages/ui/i18n.mjs';
+import { featureName, groupName } from '../../packages/ui/feature-labels.mjs';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const clone = value => structuredClone(value);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -7,15 +9,16 @@ const selected = (route, id) => route.allowedModelIds.includes(id);
 const compatible = (route, model) => Boolean(model) && model.capabilities?.text !== false && (route.kind !== 'extract' || model.capabilities?.structured !== false);
 const relevant = (route, model) => compatible(route, model) || selected(route, model.id)
   || route.modelId === model.id || Boolean(route.reasoningOverrides?.[model.id]);
-const requirements = route => route.kind === 'extract' ? '文本生成＋结构化输出' : '文本生成';
+const requirements = route => route.kind === 'extract' ? t('manager.structuredRequirements') : t('common.textGeneration');
 const focusKey = node => node.dataset.focus || ['mm', 'id', 'value', 'group', 'route', 'level'].map(key => node.dataset[key] || '').join('|');
-const labels = { none: '关闭', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '极限', ultra: '超高' };
+const labels = { none: 'common.off', minimal: 'effort.minimal', low: 'effort.low', medium: 'effort.medium', high: 'effort.high', xhigh: 'effort.xhigh', max: 'effort.max', ultra: 'effort.ultra' };
+const effortLabel = level => Object.hasOwn(labels, level) ? t(labels[level]) : level;
 const chevron = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>';
 const pin = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-4 1-4 4 1 3-2 2-6-6 2-2 3 1 4-4z"/><path d="m8 16-5 5"/></svg>';
 const refresh = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/></svg>';
-const sourceLabels = { openai: '模型 API', ollama: '本机 Ollama', codex: '本机 Codex' };
+const sourceLabels = { openai: 'common.modelApi', ollama: 'common.localOllama', codex: 'common.localCodex' };
 const storageKey = 'model-dock-demo-draft-v1';
-const columns = { connections: [['provider', '凭证 / 服务', 152, 120], ['model', '模型', 256, 180], ['effort', '思考深度（可选 / 默认）', 320, 180]], functions: [['feature', '功能', 200, 120], ['model', '模型', 416, 240]] };
+const columns = { connections: [['provider', 'common.credentialService', 152, 120], ['model', 'common.model', 256, 180], ['effort', 'common.effortsHeading', 320, 180]], functions: [['feature', 'manager.feature', 200, 120], ['model', 'common.model', 416, 240]] };
 const config = state => ({ models: state.models.map(model => ({ id: model.id, enabled: model.enabled, reasoningPolicy: model.reasoningPolicy || null, groupPolicies: model.groupPolicies || {} })), routes: clone(state.routes) });
 function fallback(levels, previous) {
   const rank = Object.keys(labels), index = rank.indexOf(previous);
@@ -30,11 +33,12 @@ function narrowed(policy, available) {
 
 export class ModelManager {
   constructor({ api, onState, notify, onDetails }) {
-    Object.assign(this, { api, onState, notify, onDetails, view: 'connections', filter: 'all', search: '', open: {}, widths: {}, busy: false, error: '', notice: '' });
+    Object.assign(this, { api, onState, notify, onDetails, view: 'connections', filter: 'all', search: '', open: {}, widths: {}, busy: false, notice: '' });
     this.unload = event => { if (this.dirtyCount) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('beforeunload', this.unload);
   }
-  reset() { this.snapshot = this.base = this.draft = null; this.restored = false; this.error = this.notice = ''; sessionStorage.removeItem(storageKey); }
+  reset() { this.snapshot = this.base = this.draft = null; this.restored = false; this.failure = undefined; this.notice = ''; sessionStorage.removeItem(storageKey); }
+  get error() { return this.failure?.() || ''; }
   accept(state, discard = false) {
     this.latest = state;
     if (!discard && this.dirtyCount) { this.acceptCatalog(state); return; }
@@ -45,12 +49,12 @@ export class ModelManager {
       try {
         const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null');
         if (state.connection?.configured === false && saved?.snapshot?.models?.length) {
-          sessionStorage.removeItem(storageKey); this.notice = '请先连接服务端，再配置授权模型。';
+          sessionStorage.removeItem(storageKey); this.notice = 'manager.connectFirst';
         } else if (saved?.base && Array.isArray(saved.draft?.models) && Array.isArray(saved.draft?.routes) && saved.snapshot && Array.isArray(saved.snapshot.models) && Array.isArray(saved.snapshot.connections)) {
-          this.snapshot = saved.snapshot; this.base = saved.base; this.draft = saved.draft; for (const key of ['view', 'filter', 'search', 'open']) if (saved.ui?.[key] !== undefined) this[key] = saved.ui[key]; this.notice = '已恢复此标签页未保存的修改。';
+          this.snapshot = saved.snapshot; this.base = saved.base; this.draft = saved.draft; for (const key of ['view', 'filter', 'search', 'open']) if (saved.ui?.[key] !== undefined) this[key] = saved.ui[key]; this.notice = 'manager.draftRestored';
           this.acceptCatalog(state);
-        } else if (saved) this.notice = '目录已更新，已载入当前设置。';
-      } catch { this.notice = '无法恢复上次草稿，已载入当前设置。'; }
+        } else if (saved) this.notice = 'manager.loadedLatest';
+      } catch { this.notice = 'manager.draftRestoreFailed'; }
     }
     try { this.widths = JSON.parse(sessionStorage.getItem('model-dock-demo-columns') || '{}'); } catch { this.widths = {}; }
   }
@@ -85,13 +89,13 @@ export class ModelManager {
     try {
       if (this.dirtyCount) sessionStorage.setItem(storageKey, JSON.stringify({ revision: this.snapshot.revision, snapshot: { revision: this.snapshot.revision, settingsRevision: this.snapshot.settingsRevision, models: this.snapshot.models, connections: this.snapshot.connections }, base: this.base, draft: this.draft, ui: { view: this.view, filter: this.filter, search: this.search, open: this.open } }));
       else sessionStorage.removeItem(storageKey);
-    } catch { this.error = '草稿暂存失败，请保留当前页面并保存修改。'; }
+    } catch { this.failure = () => t('manager.draftStorageFailed'); }
   }
-  changed() { this.notice = ''; this.error = ''; this.remember(); this.render(); }
+  changed() { this.notice = ''; this.failure = undefined; this.remember(); this.render(); }
   upsertRoute(route) {
     route = { ...route, id: route.id.trim(), name: route.name.trim(), group: route.group.trim() };
-    if (!route.name) throw new Error('请填写功能名称。');
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(route.id)) throw new Error('功能 ID 只能使用字母、数字、点、短横线或下划线。');
+    if (!route.name) throw new Error(t('manager.featureNameRequired'));
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(route.id)) throw new Error(t('manager.featureIdFormat'));
     const previous = this.draft.routes.find(item => item.id === route.id);
     const next = { modelId: '', allowedModelIds: [], reasoningOverrides: {}, ...previous, ...route };
     if (previous?.kind !== next.kind) next.allowedModelIds = next.allowedModelIds.filter(id => compatible(next, this.model(id)));
@@ -109,7 +113,7 @@ export class ModelManager {
     const table = this.root.querySelector('.cm-table');
     table?.style.setProperty(`--cm-${key}`, `${this.width(key)}px`);
     this.root.querySelector(`[data-column="${key}"]`)?.setAttribute('aria-valuenow', this.width(key));
-    if (persist) { try { sessionStorage.setItem('model-dock-demo-columns', JSON.stringify(this.widths)); } catch { this.notify('列宽暂存失败。', true); } }
+    if (persist) { try { sessionStorage.setItem('model-dock-demo-columns', JSON.stringify(this.widths)); } catch { this.notify(t('manager.columnStorageFailed'), true); } }
   }
   mount(root, state) {
     this.endResize?.(); this.listeners?.abort(); this.listeners = new window.AbortController();
@@ -146,17 +150,17 @@ export class ModelManager {
     const focus = focused && focusKey(focused);
     const dirty = this.dirtyCount, enabled = this.draft.models.filter(model => this.usable(model.id)).length;
     const conflict = dirty && this.latest.revision !== this.snapshot.revision;
-    this.root.innerHTML = `<section class="cm-manager" aria-label="应用功能与模型管理" aria-busy="${this.busy}">
-      <div class="cm-toolbar"><div class="cm-filters" role="group" aria-label="模型类型筛选">${[['all', '全部'], ['text', '文本与理解']].map(([key, label]) => `<button data-mm="filter" data-value="${key}" aria-pressed="${this.filter === key}">${label}</button>`).join('')}</div><div class="cm-actions"><div class="cm-segment" role="group" aria-label="管理视图"><button data-mm="view" data-value="connections" data-model-view="connections" aria-pressed="${this.view === 'connections'}">按凭证</button><button data-mm="view" data-value="functions" data-model-view="functions" aria-pressed="${this.view === 'functions'}">按功能</button></div><span class="cm-count">已启用 ${enabled} / ${this.draft.models.length}</span><button class="cm-save ${dirty ? 'primary' : ''}" data-mm="save" ${!dirty || this.busy ? 'disabled' : ''}>${this.busy ? '处理中…' : dirty ? `保存更改 · ${dirty}` : '已保存'}</button></div></div>
-      <div class="cm-secondary"><input id="model-search" data-focus="model-search" type="search" aria-label="搜索模型、凭证或功能" placeholder="搜索模型、凭证或功能…" value="${esc(this.search)}"><div class="cm-actions"><button class="cm-text" data-mm="revert" ${!dirty || this.busy ? 'disabled' : ''}>撤销更改</button><button class="cm-text" data-mm="refresh" ${this.busy || this.latest.connection?.configured === false ? 'disabled' : ''}>${this.busy ? '处理中…' : '刷新模型'}</button><button class="cm-text" data-action="add-route" ${this.busy ? 'disabled' : ''}>＋ 添加功能</button></div></div>
-      ${this.error ? `<div class="cm-feedback error" role="alert">${esc(this.error)}</div>` : ''}${conflict ? '<div class="cm-feedback" role="status">目录或设置已在其他页面更新。未保存修改已保留；请撤销更改后重新编辑。</div>' : ''}${this.notice ? `<div class="cm-feedback" role="status">${esc(this.notice)}</div>` : ''}
+    this.root.innerHTML = `<section class="cm-manager" aria-label="${t('manager.region')}" aria-busy="${this.busy}">
+      <div class="cm-toolbar"><div class="cm-filters" role="group" aria-label="${t('common.modelTypeFilters')}">${[['all', t('common.all')], ['text', t('common.textUnderstanding')]].map(([key, label]) => `<button data-mm="filter" data-value="${key}" aria-pressed="${this.filter === key}">${label}</button>`).join('')}</div><div class="cm-actions"><div class="cm-segment" role="group" aria-label="${t('manager.views')}"><button data-mm="view" data-value="connections" data-model-view="connections" aria-pressed="${this.view === 'connections'}">${t('manager.byCredential')}</button><button data-mm="view" data-value="functions" data-model-view="functions" aria-pressed="${this.view === 'functions'}">${t('manager.byFeature')}</button></div><span class="cm-count">${t('common.enabledCount', enabled, this.draft.models.length)}</span><button class="cm-save ${dirty ? 'primary' : ''}" data-mm="save" ${!dirty || this.busy ? 'disabled' : ''}>${this.busy ? t('common.working') : dirty ? t('common.saveChangesCount', dirty) : t('common.saved')}</button></div></div>
+      <div class="cm-secondary"><input id="model-search" data-focus="model-search" type="search" aria-label="${t('manager.searchLabel')}" placeholder="${t('manager.searchPlaceholder')}" value="${esc(this.search)}"><div class="cm-actions"><button class="cm-text" data-mm="revert" ${!dirty || this.busy ? 'disabled' : ''}>${t('common.discardChanges')}</button><button class="cm-text" data-mm="refresh" ${this.busy || this.latest.connection?.configured === false ? 'disabled' : ''}>${this.busy ? t('common.working') : t('common.refreshModels')}</button><button class="cm-text" data-action="add-route" ${this.busy ? 'disabled' : ''}>${t('manager.addFeature')}</button></div></div>
+      ${this.error ? `<div class="cm-feedback error" role="alert">${esc(this.error)}</div>` : ''}${conflict ? `<div class="cm-feedback" role="status">${t('manager.settingsConflict')}</div>` : ''}${this.notice ? `<div class="cm-feedback" role="status">${esc(t(this.notice))}</div>` : ''}
       <div id="model-list"></div></section>`;
     this.renderTable();
     const scroller = this.root.querySelector('.cm-scroller'); if (scroller) scroller.scrollLeft = scroll;
     if (focus) [...this.root.querySelectorAll('[data-focus], [data-mm]')].find(node => focusKey(node) === focus)?.focus({ preventScroll: true });
   }
   header() {
-    return `<div class="cm-header">${columns[this.view].map(([key, label, , min]) => `<span>${label}<button type="button" class="cm-resizer" data-column="${key}" role="separator" aria-orientation="vertical" aria-label="调整${label}列宽" aria-valuemin="${min}" aria-valuemax="1200" aria-valuenow="${this.width(key)}" title="拖动调整列宽，双击恢复默认宽度"></button></span>`).join('')}<span>${this.view === 'connections' ? '可应用功能' : '思考深度（可选 / 默认）'}</span></div>`;
+    return `<div class="cm-header">${columns[this.view].map(([key, label, , min]) => `<span>${t(label)}<button type="button" class="cm-resizer" data-column="${key}" role="separator" aria-orientation="vertical" aria-label="${t('common.resizeColumn', t(label))}" aria-valuemin="${min}" aria-valuemax="1200" aria-valuenow="${this.width(key)}" title="${t('common.resizeColumnHelp')}"></button></span>`).join('')}<span>${this.view === 'connections' ? t('manager.availableFeatures') : t('common.effortsHeading')}</span></div>`;
   }
   renderTable() {
     const target = this.root.querySelector('#model-list');
@@ -167,17 +171,17 @@ export class ModelManager {
     const matches = values => values.join(' ').toLowerCase().includes(needle);
     const modelMatches = model => {
       const connection = this.source(model);
-      return matches([model.name, model.id, model.nativeId, connection?.name, sourceLabels[connection?.type]]);
+      return matches([model.name, model.id, model.nativeId, connection?.name, sourceLabels[connection?.type] && t(sourceLabels[connection.type])]);
     };
-    const featureMatches = route => matches([route.name, route.id, route.group]);
+    const featureMatches = route => matches([route.name, featureName(route), route.id, route.group, groupName(route.group)]);
     const html = this.view === 'connections' ? this.credentialRows(models, modelMatches, featureMatches)
       : this.functionRows(models, modelMatches, featureMatches);
     if (!html) {
-      const message = !models.length ? '尚无授权模型。请连接网关并检查项目的模型权限。' : '没有匹配的模型或功能。';
+      const message = !models.length ? t('manager.emptyCatalog') : t('manager.noMatches');
       target.innerHTML = `<p class="cm-empty">${message}</p>`;
       return;
     }
-    target.innerHTML = `<div class="cm-scroller" tabindex="0" role="region" aria-label="${this.view === 'connections' ? '按凭证' : '按功能'}查看模型能力">
+    target.innerHTML = `<div class="cm-scroller" tabindex="0" role="region" aria-label="${t('manager.tableAria', this.view === 'connections' ? t('manager.byCredential') : t('manager.byFeature'))}">
       <div class="cm-table cm-${this.view}">${this.header()}${html}</div>
     </div>`;
     const table = target.querySelector('.cm-table');
@@ -201,14 +205,14 @@ export class ModelManager {
       if (!rows.length) return '';
       const all = this.snapshot.models.filter(model => model.connectionId === connection.id);
       const status = connection.status === 'error' ? 'error' : connection.enabled ? connection.status : 'disabled';
-      const label = { connected: '授权目录可用', error: '目录检查失败', disabled: '目录不可用' }[status] || '尚未检查';
-      return `<section class="cm-provider-row" aria-label="${esc(connection.name)}模型">
+      const label = { connected: t('manager.catalogAvailable'), error: t('manager.catalogCheckFailed'), disabled: t('manager.catalogUnavailable') }[status] || t('common.notChecked');
+      return `<section class="cm-provider-row" aria-label="${t('common.connectionModelsAria', esc(connection.name))}">
         <div class="cm-provider-info">
           <h2>${esc(connection.name)}</h2>
-          <p>${esc(sourceLabels[connection.type])}</p>
-          <span class="cm-badge">${all.filter(model => model.available !== false).length} / ${all.length} 已授权</span>
+          <p>${esc(t(sourceLabels[connection.type]))}</p>
+          <span class="cm-badge">${t('manager.authorizedCount', all.filter(model => model.available !== false).length, all.length)}</span>
           <div class="cm-runtime" data-status="${esc(status)}"><span aria-hidden="true"></span>${label}
-            <button class="cm-status-refresh" data-mm="discover" data-id="${esc(connection.id)}" aria-label="刷新${esc(connection.name)}授权目录" ${this.busy ? 'disabled' : ''}>${refresh}</button>
+            <button class="cm-status-refresh" data-mm="discover" data-id="${esc(connection.id)}" aria-label="${t('manager.refreshCatalogAria', esc(connection.name))}" ${this.busy ? 'disabled' : ''}>${refresh}</button>
           </div>
         </div>
         <div>${rows.map(({ model, applicable, visible }) => this.modelRow(model, applicable, visible)).join('')}</div>
@@ -219,11 +223,11 @@ export class ModelManager {
   modelRow(model, applicable, visible) {
     const enabled = this.usable(model.id), levels = this.levels(model.id), settings = this.policy(model.id);
     const form = this.form(model.id), tags = [];
-    if (model.capabilities?.text === true) tags.push('文本生成');
-    if (model.capabilities?.tools) tags.push('工具调用');
-    if (model.capabilities?.structured) tags.push('结构化输出');
-    if (levels.length || model.capabilities?.thinking) tags.push('深度思考');
-    if (model.capabilities?.text == null) tags.push('能力待验证');
+    if (model.capabilities?.text === true) tags.push(t('common.textGeneration'));
+    if (model.capabilities?.tools) tags.push(t('common.toolCalls'));
+    if (model.capabilities?.structured) tags.push(t('common.structuredOutput'));
+    if (levels.length || model.capabilities?.thinking) tags.push(t('common.deepReasoning'));
+    if (model.capabilities?.text == null) tags.push(t('manager.capabilitiesUnverified'));
     const policies = [form.reasoningPolicy, ...Object.values(form.groupPolicies), ...this.draft.routes.map(route => route.reasoningOverrides?.[model.id])];
     const obsolete = policies.some(policy => policy && (!levels.includes(policy.defaultEffort) || policy.allowedEfforts.some(level => !levels.includes(level))));
     const groupRows = this.groups().map(group => {
@@ -231,31 +235,31 @@ export class ModelManager {
       if (!shown.length) return '';
       const complete = applicable.filter(route => route.group === group.name && route.selection === 'multiple').length === shown.length;
       return complete ? this.credentialGroup(model, { name: group.name, routes: shown })
-        : `<div class="cm-feature-group"><p class="cm-match-group">${esc(group.name)}</p><div class="cm-children">${shown.map(route => this.association(model, route, true)).join('')}</div></div>`;
+        : `<div class="cm-feature-group"><p class="cm-match-group">${esc(groupName(group.name))}</p><div class="cm-children">${shown.map(route => this.association(model, route, true)).join('')}</div></div>`;
     }).join('');
     const standalone = visible.filter(route => !route.group || route.selection === 'single');
     return `<div class="cm-model-row" data-enabled="${enabled}" data-model-id="${esc(model.id)}">
       <div class="cm-model-info">
         <h3>${esc(model.name)}</h3>
         <div class="cm-capabilities">${tags.map(tag => `<span class="cm-badge">${tag}</span>`).join('')}</div>
-        <div class="cm-limits">${model.contextWindow ? `上下文 ${model.contextWindow.toLocaleString()} tokens` : '上下文上限未声明'}
-          <button class="cm-info" data-mm="details" data-id="${esc(model.id)}" aria-label="查看${esc(model.name)}模型详情" aria-haspopup="dialog">ⓘ</button>
+        <div class="cm-limits">${model.contextWindow ? t('manager.contextTokens', number(model.contextWindow)) : t('manager.noContextLimit')}
+          <button class="cm-info" data-mm="details" data-id="${esc(model.id)}" aria-label="${t('manager.detailsAria', esc(model.name))}" aria-haspopup="dialog">ⓘ</button>
         </div>
-        ${levels.length ? `<span class="cm-caption">开放的思考深度</span><div class="cm-levels" role="group" aria-label="${esc(model.name)}开放的思考深度">
+        ${levels.length ? `<span class="cm-caption">${t('common.allowedEfforts')}</span><div class="cm-levels" role="group" aria-label="${t('common.allowedEffortsAria', esc(model.name))}">
           ${levels.map(level => {
             const on = settings.allowedEfforts.includes(level);
             return `<button data-mm="model-effort" data-id="${esc(model.id)}" data-level="${esc(level)}" aria-pressed="${on}"
-              ${this.busy || !enabled || on && settings.allowedEfforts.length === 1 ? 'disabled' : ''}>${esc(labels[level] ? `${labels[level]}（${level}）` : level)}</button>`;
+              ${this.busy || !enabled || on && settings.allowedEfforts.length === 1 ? 'disabled' : ''}>${esc(effortLabel(level) === level ? level : t('common.effortWithId', effortLabel(level), level))}</button>`;
           }).join('')}
         </div>` : ''}
-        ${obsolete ? `<span class="cm-caption">目录已变更，旧思考设置需重置</span><button class="cm-text" data-mm="reset-reasoning" data-id="${esc(model.id)}" ${this.busy ? 'disabled' : ''}>清除旧思考设置</button>` : ''}
-        <button class="cm-toggle" role="switch" aria-checked="${form.enabled}" aria-label="供此应用使用 ${esc(model.name)}" data-mm="toggle-model" data-action="toggle-model"
+        ${obsolete ? `<span class="cm-caption">${t('manager.resetReasoningHelp')}</span><button class="cm-text" data-mm="reset-reasoning" data-id="${esc(model.id)}" ${this.busy ? 'disabled' : ''}>${t('manager.resetReasoning')}</button>` : ''}
+        <button class="cm-toggle" role="switch" aria-checked="${form.enabled}" aria-label="${t('manager.enableAria', esc(model.name))}" data-mm="toggle-model" data-action="toggle-model"
           data-id="${esc(model.id)}" ${this.busy || !form.enabled && (model.available === false || !this.source(model)?.enabled) ? 'disabled' : ''}>
-          <span class="cm-track" aria-hidden="true"><span></span></span>${model.available === false ? '模型不可用' : form.enabled ? '已启用' : '未启用'}
+          <span class="cm-track" aria-hidden="true"><span></span></span>${model.available === false ? t('manager.modelUnavailable') : form.enabled ? t('common.enabled') : t('common.disabled')}
         </button>
       </div>
       <div class="cm-associations">${groupRows}${standalone.map(route => this.association(model, route)).join('')}
-        ${!visible.length ? '<p class="cm-empty">此模型暂无可配置的功能</p>' : ''}
+        ${!visible.length ? `<p class="cm-empty">${t('manager.noFeatures')}</p>` : ''}
       </div>
     </div>`;
   }
@@ -265,7 +269,7 @@ export class ModelManager {
     return `<div class="cm-association">
       <div class="cm-effort-cell">${configured ? this.effortPicker(model, route.group, route.id, !selected(route, model.id) || !compatible(route, model)) : '<span class="cm-muted">—</span>'}</div>
       <div class="cm-feature-cell ${child ? '' : 'cm-standalone'}">${this.routeChoice(model, route)}
-        <button class="cm-text cm-edit" data-action="edit-route" data-id="${esc(route.id)}" aria-label="编辑${esc(route.name)}" ${this.busy ? 'disabled' : ''}>编辑</button>
+        <button class="cm-text cm-edit" data-action="edit-route" data-id="${esc(route.id)}" aria-label="${t('manager.editFeatureAria', esc(featureName(route)))}" ${this.busy ? 'disabled' : ''}>${t('common.edit')}</button>
       </div>
     </div>`;
   }
@@ -279,10 +283,10 @@ export class ModelManager {
       <div class="cm-association">
         <div class="cm-effort-cell">${count ? this.effortPicker(model, group.name, null, false) : '<span class="cm-muted">—</span>'}</div>
         <div class="cm-feature-cell">
-          <button class="cm-disclosure" data-mm="expand" data-value="${esc(key)}" aria-label="${expanded ? '收起' : '展开'}${esc(model.name)}${esc(group.name)}子功能" aria-expanded="${expanded}" aria-controls="${controls}">${chevron}</button>
+          <button class="cm-disclosure" data-mm="expand" data-value="${esc(key)}" aria-label="${t('manager.groupDisclosureAria', expanded ? t('manager.collapse') : t('manager.expand'), esc(model.name), esc(groupName(group.name)))}" aria-expanded="${expanded}" aria-controls="${controls}">${chevron}</button>
           ${this.groupCheck(model, group)}
-          <button class="cm-text" data-mm="expand" data-value="${esc(key)}" data-focus="count:${esc(key)}" aria-expanded="${expanded}" aria-controls="${controls}">${count} / ${total} 个子功能</button>
-          ${overrides ? `<span class="cm-badge">${overrides} 项单独设置</span>` : ''}
+          <button class="cm-text" data-mm="expand" data-value="${esc(key)}" data-focus="count:${esc(key)}" aria-expanded="${expanded}" aria-controls="${controls}">${t('manager.selectedSubfeatureCount', count, total)}</button>
+          ${overrides ? `<span class="cm-badge">${t('manager.overrideCount', overrides)}</span>` : ''}
         </div>
       </div>
       <div class="cm-children" id="${controls}" ${expanded ? '' : 'hidden'}>${expanded ? group.routes.map(route => this.association(model, route, true)).join('') : ''}</div>
@@ -305,8 +309,8 @@ export class ModelManager {
     return `<label class="cm-check">
       <input type="checkbox" data-mm="bind-group" data-id="${esc(model.id)}" data-group="${esc(group.name)}"
         ${checked ? 'checked' : ''} data-mixed="${mixed}" aria-checked="${mixed ? 'mixed' : checked}"
-        aria-label="${esc(model.name)}加入${esc(group.name)}候选" ${this.busy || !this.usable(model.id) || !total ? 'disabled' : ''}>
-      ${featureView ? `<span class="cm-model-label"><small>${esc(this.source(model)?.name)}</small><span>${esc(model.name)}</span></span>` : `<strong>${esc(group.name)}</strong>`}
+        aria-label="${t('manager.bindGroupAria', esc(model.name), esc(groupName(group.name)))}" ${this.busy || !this.usable(model.id) || !total ? 'disabled' : ''}>
+      ${featureView ? `<span class="cm-model-label"><small>${esc(this.source(model)?.name)}</small><span>${esc(model.name)}</span></span>` : `<strong>${esc(groupName(group.name))}</strong>`}
     </label>`;
   }
 
@@ -317,17 +321,17 @@ export class ModelManager {
     const attrs = `data-id="${esc(model.id)}" data-route="${esc(route.id)}"`;
     return `<div class="cm-choice">
       <input id="${input}" type="${single ? 'radio' : 'checkbox'}" ${single ? `name="model-${esc(route.id)}"` : ''} data-mm="bind-route" ${attrs}
-        ${bound ? 'checked' : ''} aria-label="${esc(route.name)}${single ? '使用' : '允许'}${esc(model.name)}" ${this.busy || !active && !bound ? 'disabled' : ''}
-        title="${single && bound ? '再次选择以清除模型' : '选择此模型'}">
+        ${bound ? 'checked' : ''} aria-label="${t(single ? 'manager.useModelAria' : 'manager.allowModelAria', esc(featureName(route)), esc(model.name))}" ${this.busy || !active && !bound ? 'disabled' : ''}
+        title="${single && bound ? t('manager.clearSelection') : t('manager.selectModel')}">
       <div class="cm-choice-info">
         ${featureView ? `<label for="${input}" class="cm-choice-source">${esc(this.source(model)?.name)}</label>` : ''}
         <div class="cm-choice-title">
-          <label for="${input}" class="${featureView ? 'cm-model-name' : ''}">${esc(featureView ? model.name : route.name)}</label>
+          <label for="${input}" class="${featureView ? 'cm-model-name' : ''}">${esc(featureView ? model.name : featureName(route))}</label>
           ${single ? '' : `<button type="button" class="cm-pin cm-default-pin" data-mm="default" ${attrs} aria-pressed="${chosen}"
-            aria-label="${esc(route.name)}默认使用${esc(model.name)}" title="${chosen ? '再次选择以清除默认模型' : '设为默认模型'}"
+            aria-label="${t('manager.defaultModelAria', esc(featureName(route)), esc(model.name))}" title="${chosen ? t('manager.clearDefault') : t('manager.setDefaultModel')}"
             ${this.busy || !chosen && !(bound && active) ? 'disabled' : ''}>${pin}</button>`}
         </div>
-        ${featureView ? '' : `<label for="${input}" class="cm-requirements">需要：${requirements(route)}</label>`}
+        ${featureView ? '' : `<label for="${input}" class="cm-requirements">${t('manager.requirements', requirements(route))}</label>`}
       </div>
     </div>`;
   }
@@ -347,8 +351,8 @@ export class ModelManager {
       const partial = visible.length < group.routes.length || rows.some(model => visible.some(route => compatible(route, model) && !candidates.get(route.id).includes(model)));
       // Bulk selection only appears when its affected children are in the result.
       if (partial || visible.some(route => route.selection === 'single')) {
-        return `<section class="cm-module" aria-label="${esc(group.name)}功能">
-          <h2 class="cm-match-group">${esc(group.name)}</h2>${visible.map(route => this.featureRow(route, candidates.get(route.id), true)).join('')}
+        return `<section class="cm-module" aria-label="${t('manager.groupFeaturesAria', esc(groupName(group.name)))}">
+          <h2 class="cm-match-group">${esc(groupName(group.name))}</h2>${visible.map(route => this.featureRow(route, candidates.get(route.id), true)).join('')}
         </section>`;
       }
       return this.functionGroup({ name: group.name, routes: visible }, rows, candidates);
@@ -362,22 +366,22 @@ export class ModelManager {
     const summaries = rows.map(model => this.groupSummary(model, group));
     const count = summaries.filter(summary => summary.count > 0).length;
     const overrides = summaries.reduce((total, summary) => total + summary.overrides, 0);
-    return `<section class="cm-module" aria-label="${esc(group.name)}功能">
+    return `<section class="cm-module" aria-label="${t('manager.groupFeaturesAria', esc(groupName(group.name)))}">
       <div class="cm-function-row">
         <div class="cm-function-info">
           <button class="cm-function-title" data-mm="expand" data-value="${esc(key)}" aria-expanded="${expanded}" aria-controls="${controls}">
-            ${chevron}<strong>${esc(group.name)}</strong>
+            ${chevron}<strong>${esc(groupName(group.name))}</strong>
           </button>
           <div class="cm-group-summary">
-            <p>已关联 ${count} 个模型</p>
-            <button class="cm-text" data-mm="expand" data-value="${esc(key)}" data-focus="count:${esc(key)}" aria-expanded="${expanded}" aria-controls="${controls}">${group.routes.length} 个子功能</button>
-            ${overrides ? `<span class="cm-badge">${overrides} 项单独设置</span>` : ''}
+            <p>${t('manager.linkedModelCount', count)}</p>
+            <button class="cm-text" data-mm="expand" data-value="${esc(key)}" data-focus="count:${esc(key)}" aria-expanded="${expanded}" aria-controls="${controls}">${t('manager.subfeatureCount', group.routes.length)}</button>
+            ${overrides ? `<span class="cm-badge">${t('manager.overrideCount', overrides)}</span>` : ''}
           </div>
         </div>
         <div>${rows.length ? rows.map((model, index) => `<div class="cm-feature-model" data-enabled="${this.usable(model.id)}">
           <div class="cm-feature-model-cell">${this.groupCheck(model, group, true)}</div>
           <div class="cm-effort-cell">${summaries[index].count ? this.effortPicker(model, group.name, null, false) : '<span class="cm-muted">—</span>'}</div>
-        </div>`).join('') : '<p class="cm-empty">暂无适用的模型</p>'}</div>
+        </div>`).join('') : `<p class="cm-empty">${t('manager.noCompatibleModels')}</p>`}</div>
       </div>
       <div id="${controls}" ${expanded ? '' : 'hidden'}>${expanded ? group.routes.map(route => this.featureRow(route, candidates.get(route.id), true)).join('') : ''}</div>
     </section>`;
@@ -386,37 +390,37 @@ export class ModelManager {
   featureRow(route, models, child = false) {
     const bound = this.usable(route.modelId) && selected(route, route.modelId) && compatible(route, this.model(route.modelId));
     const count = route.allowedModelIds.filter(id => this.usable(id) && compatible(route, this.model(id))).length;
-    return `<section class="cm-function-row ${child ? 'cm-child-function' : ''}" aria-label="${esc(route.name)}">
+    return `<section class="cm-function-row ${child ? 'cm-child-function' : ''}" aria-label="${esc(featureName(route))}">
       <div class="cm-function-info">
-        <h3>${esc(route.name)}</h3>
-        <p class="cm-meta">已关联 ${count} 个模型${route.selection === 'single' ? ' · 单选' : ''}</p>
-        <p class="cm-requirements">需要：${requirements(route)}</p>
-        ${!bound ? `<p class="cm-meta cm-warning">${route.modelId ? '默认模型不可用' : '尚未指定默认模型'}</p>` : ''}
+        <h3>${esc(featureName(route))}</h3>
+        <p class="cm-meta">${t('manager.featureModelCount', count, route.selection === 'single' ? t('manager.singleSelectionNote') : '')}</p>
+        <p class="cm-requirements">${t('manager.requirements', requirements(route))}</p>
+        ${!bound ? `<p class="cm-meta cm-warning">${route.modelId ? t('common.defaultModelUnavailable') : t('manager.noDefaultModel')}</p>` : ''}
         <div class="cm-actions">
-          <button class="cm-text" data-action="edit-route" data-id="${esc(route.id)}" aria-label="编辑${esc(route.name)}" ${this.busy ? 'disabled' : ''}>编辑</button>
-          <button class="cm-text" data-action="delete-route" data-id="${esc(route.id)}" aria-label="删除${esc(route.name)}" ${this.busy ? 'disabled' : ''}>删除</button>
+          <button class="cm-text" data-action="edit-route" data-id="${esc(route.id)}" aria-label="${t('manager.editFeatureAria', esc(featureName(route)))}" ${this.busy ? 'disabled' : ''}>${t('common.edit')}</button>
+          <button class="cm-text" data-action="delete-route" data-id="${esc(route.id)}" aria-label="${t('manager.deleteFeatureAria', esc(featureName(route)))}" ${this.busy ? 'disabled' : ''}>${t('manager.delete')}</button>
         </div>
       </div>
       <div>${models.length ? models.map(model => `<div class="cm-feature-model" data-enabled="${this.usable(model.id)}">
         <div class="cm-feature-model-cell">${this.routeChoice(model, route, true)}</div>
         <div class="cm-effort-cell">${selected(route, model.id) || route.reasoningOverrides?.[model.id]
           ? this.effortPicker(model, route.group, route.id, !selected(route, model.id) || !compatible(route, model)) : '<span class="cm-muted">—</span>'}</div>
-      </div>`).join('') : '<p class="cm-empty">暂无适用的模型</p>'}</div>
+      </div>`).join('') : `<p class="cm-empty">${t('manager.noCompatibleModels')}</p>`}</div>
     </section>`;
   }
   effortPicker(model, group, routeId, unbound) {
     const levels = this.levels(model.id);
-    if (!levels.length) return '<span class="cm-muted" title="上游未声明可配置的思考等级">—</span>';
+    if (!levels.length) return `<span class="cm-muted" title="${t('manager.noUpstreamLevels')}">—</span>`;
     const settings = this.policy(model.id, group, routeId), available = this.policy(model.id, routeId ? group : null).allowedEfforts;
     const disabled = this.busy || !this.usable(model.id) || unbound;
     const label = `${model.name} · ${routeId ? this.draft.routes.find(row => row.id === routeId).name : group}`;
     const attrs = `data-id="${esc(model.id)}" data-group="${esc(group)}" ${routeId ? `data-route="${esc(routeId)}"` : ''}`;
     const override = routeId ? this.draft.routes.find(row => row.id === routeId).reasoningOverrides?.[model.id]
       : Object.hasOwn(this.form(model.id).groupPolicies, group) && this.form(model.id).groupPolicies[group];
-    return `<div class="cm-efforts" role="group" aria-label="${esc(label)}思考深度">${levels.map(level => {
+    return `<div class="cm-efforts" role="group" aria-label="${t('manager.effortsAria', esc(label))}">${levels.map(level => {
       const on = settings.allowedEfforts.includes(level), pinned = settings.defaultEffort === level;
-      return `<span class="cm-effort-option" data-allowed="${on}" data-unavailable="${disabled || !available.includes(level)}"><button class="cm-effort-toggle" data-mm="effort" ${attrs} data-level="${esc(level)}" data-focus="${esc(label + level)}" aria-label="${esc(label)}：${esc(labels[level] || level)}可选" aria-pressed="${on}" title="${on && settings.allowedEfforts.length === 1 ? '至少保留一个可选深度' : on ? '停用此深度' : '开放此深度'}" ${disabled || !available.includes(level) || on && settings.allowedEfforts.length === 1 ? 'disabled' : ''}>${esc(labels[level] || level)}</button><button class="cm-pin cm-effort-pin" data-mm="pin" ${attrs} data-level="${esc(level)}" aria-label="${esc(label)}：${esc(labels[level] || level)}设为默认" aria-pressed="${pinned}" title="${pinned ? '默认思考深度' : '设为默认思考深度'}" ${disabled || !on || !available.includes(level) ? 'disabled' : ''}>${pin}</button></span>`;
-    }).join('')}${override ? `<button class="cm-text" data-mm="inherit" ${attrs} ${this.busy ? 'disabled' : ''}>恢复继承</button>` : ''}</div>`;
+      return `<span class="cm-effort-option" data-allowed="${on}" data-unavailable="${disabled || !available.includes(level)}"><button class="cm-effort-toggle" data-mm="effort" ${attrs} data-level="${esc(level)}" data-focus="${esc(label + level)}" aria-label="${t('common.effortOptionAria', esc(label), esc(effortLabel(level)))}" aria-pressed="${on}" title="${on && settings.allowedEfforts.length === 1 ? t('manager.keepOneLevel') : on ? t('manager.disableEffort') : t('manager.enableEffort')}" ${disabled || !available.includes(level) || on && settings.allowedEfforts.length === 1 ? 'disabled' : ''}>${esc(effortLabel(level))}</button><button class="cm-pin cm-effort-pin" data-mm="pin" ${attrs} data-level="${esc(level)}" aria-label="${t('common.effortDefaultAria', esc(label), esc(effortLabel(level)))}" aria-pressed="${pinned}" title="${pinned ? t('common.defaultEffort') : t('manager.setDefaultEffort')}" ${disabled || !on || !available.includes(level) ? 'disabled' : ''}>${pin}</button></span>`;
+    }).join('')}${override ? `<button class="cm-text" data-mm="inherit" ${attrs} ${this.busy ? 'disabled' : ''}>${t('manager.restoreInheritance')}</button>` : ''}</div>`;
   }
   updateEffort(data, pinOnly = false, modelOnly = false) {
     const model = this.form(data.id), current = clone(this.policy(data.id, modelOnly ? null : data.group, modelOnly ? null : data.route));
@@ -468,23 +472,23 @@ export class ModelManager {
     }
     if (mm === 'details') this.onDetails(this.model(id));
     if (mm === 'save') {
-      this.busy = true; this.error = ''; this.render();
+      this.busy = true; this.failure = undefined; this.render();
       try {
         const result = await this.api('/api/settings', { method: 'POST', body: { revision: this.snapshot.revision, ...this.draft } });
-        this.accept(result.state, true); this.onState(result.state); this.remember(); this.notice = '应用功能与模型设置已保存。'; this.notify(this.notice);
-      } catch (error) { this.error = `${error.message} 未保存的修改仍保留在页面中。`; }
+        this.accept(result.state, true); this.onState(result.state); this.remember(); this.notice = 'manager.settingsSaved'; this.notify(t(this.notice));
+      } catch (error) { this.failure = () => t('manager.saveFailedWithDraft', errorText(error)); }
       finally { this.busy = false; this.render(); }
     }
     if (['revert', 'refresh', 'discover'].includes(mm)) {
-      this.busy = true; this.error = ''; this.render();
+      this.busy = true; this.failure = undefined; this.render();
       try {
         let next = await this.api('/api/state');
         // Always request current server metadata, including with a local draft.
         if (mm !== 'revert') {
           next = (await this.api('/api/refresh', { method: 'POST', body: { revision: next.revision } })).state;
         }
-        this.accept(next, mm === 'revert'); this.onState(next); this.remember(); this.notice = mm === 'revert' ? '已撤销更改，载入最新设置。' : this.dirtyCount ? '模型与能力已更新，未保存的修改已保留。' : '模型与能力已更新，新授权模型默认关闭。';
-      } catch (error) { this.error = error.message; try { const next = await this.api('/api/state'); this.accept(next); this.onState(next); } catch {} }
+        this.accept(next, mm === 'revert'); this.onState(next); this.remember(); this.notice = mm === 'revert' ? 'manager.changesDiscarded' : this.dirtyCount ? 'manager.catalogUpdatedWithDraft' : 'manager.catalogUpdated';
+      } catch (error) { this.failure = () => errorText(error); try { const next = await this.api('/api/state'); this.accept(next); this.onState(next); } catch {} }
       finally { this.busy = false; this.render(); }
     }
   }
