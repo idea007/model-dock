@@ -105,7 +105,7 @@ for (const entry of ['', '?view=models', '?view=settings']) test(`client page ${
   await open();
   assert.equal(document.querySelector('#login-form'), null); assert.ok(document.querySelector('.shell'));
   assert.equal(document.querySelector('h1').textContent, entry === '?view=settings' ? '接入设置' : entry ? '功能与模型' : '你的功能，选择你的模型。');
-  assert.deepEqual([...document.querySelectorAll('.nav [data-view]')].map(node => node.dataset.view), ['experience', 'models', 'settings']);
+  assert.deepEqual([...document.querySelectorAll('.nav [data-view]')].map(node => node.dataset.view), ['settings', 'models', 'experience']);
   assert.equal(document.querySelectorAll('.demo-heading [data-action="connection"]').length, 0);
   assert.match(document.querySelector('.mode-badge').textContent, /未连接/);
   if (entry === '?view=models') assert.match(document.querySelector('#model-list').textContent, /尚无授权模型/);

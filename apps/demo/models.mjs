@@ -323,9 +323,9 @@ export class ModelManager {
         ${featureView ? `<label for="${input}" class="cm-choice-source">${esc(this.source(model)?.name)}</label>` : ''}
         <div class="cm-choice-title">
           <label for="${input}" class="${featureView ? 'cm-model-name' : ''}">${esc(featureView ? model.name : route.name)}</label>
-          ${single ? '' : `<input type="radio" class="cm-default" name="default-${esc(route.id)}" data-mm="default" ${attrs} ${chosen ? 'checked' : ''}
+          ${single ? '' : `<button type="button" class="cm-pin cm-default-pin" data-mm="default" ${attrs} aria-pressed="${chosen}"
             aria-label="${esc(route.name)}默认使用${esc(model.name)}" title="${chosen ? '再次选择以清除默认模型' : '设为默认模型'}"
-            ${this.busy || !chosen && !(bound && active) ? 'disabled' : ''}>`}
+            ${this.busy || !chosen && !(bound && active) ? 'disabled' : ''}>${pin}</button>`}
         </div>
         ${featureView ? '' : `<label for="${input}" class="cm-requirements">需要：${requirements(route)}</label>`}
       </div>
@@ -415,7 +415,7 @@ export class ModelManager {
       : Object.hasOwn(this.form(model.id).groupPolicies, group) && this.form(model.id).groupPolicies[group];
     return `<div class="cm-efforts" role="group" aria-label="${esc(label)}思考深度">${levels.map(level => {
       const on = settings.allowedEfforts.includes(level), pinned = settings.defaultEffort === level;
-      return `<span class="cm-effort-option" data-allowed="${on}" data-unavailable="${disabled || !available.includes(level)}"><button class="cm-effort-toggle" data-mm="effort" ${attrs} data-level="${esc(level)}" data-focus="${esc(label + level)}" aria-label="${esc(label)}：${esc(labels[level] || level)}可选" aria-pressed="${on}" title="${on && settings.allowedEfforts.length === 1 ? '至少保留一个可选深度' : on ? '停用此深度' : '开放此深度'}" ${disabled || !available.includes(level) || on && settings.allowedEfforts.length === 1 ? 'disabled' : ''}>${esc(labels[level] || level)}</button><button class="cm-effort-pin" data-mm="pin" ${attrs} data-level="${esc(level)}" aria-label="${esc(label)}：${esc(labels[level] || level)}设为默认" aria-pressed="${pinned}" title="${pinned ? '默认思考深度' : '设为默认思考深度'}" ${disabled || !on || !available.includes(level) ? 'disabled' : ''}>${pin}</button></span>`;
+      return `<span class="cm-effort-option" data-allowed="${on}" data-unavailable="${disabled || !available.includes(level)}"><button class="cm-effort-toggle" data-mm="effort" ${attrs} data-level="${esc(level)}" data-focus="${esc(label + level)}" aria-label="${esc(label)}：${esc(labels[level] || level)}可选" aria-pressed="${on}" title="${on && settings.allowedEfforts.length === 1 ? '至少保留一个可选深度' : on ? '停用此深度' : '开放此深度'}" ${disabled || !available.includes(level) || on && settings.allowedEfforts.length === 1 ? 'disabled' : ''}>${esc(labels[level] || level)}</button><button class="cm-pin cm-effort-pin" data-mm="pin" ${attrs} data-level="${esc(level)}" aria-label="${esc(label)}：${esc(labels[level] || level)}设为默认" aria-pressed="${pinned}" title="${pinned ? '默认思考深度' : '设为默认思考深度'}" ${disabled || !on || !available.includes(level) ? 'disabled' : ''}>${pin}</button></span>`;
     }).join('')}${override ? `<button class="cm-text" data-mm="inherit" ${attrs} ${this.busy ? 'disabled' : ''}>恢复继承</button>` : ''}</div>`;
   }
   updateEffort(data, pinOnly = false, modelOnly = false) {

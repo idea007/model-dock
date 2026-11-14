@@ -22,7 +22,7 @@ try {
   app = await startGateway({ directory: path.join(temporary, 'data'), port: 0, providers: { openai: {
     async *generate() { yield { type: 'delta', delta: { content: 'Package smoke response' } }; yield { type: 'done', finishReason: 'stop' }; }
   } } });
-  for (const endpoint of ['/', '/assets/app.mjs', '/assets/style.css', '/assets/models.css', '/assets/events.mjs', '/assets/image-options.mjs', '/healthz']) {
+  for (const endpoint of ['/', '/assets/app.mjs', '/assets/style.css', '/assets/models.css', '/assets/api-docs.mjs', '/assets/api-docs.css', '/assets/events.mjs', '/assets/image-options.mjs', '/healthz']) {
     const response = await fetch(app.origin + endpoint);
     if (!response.ok) throw new Error(`Installed artifact missing ${endpoint}`);
     await response.arrayBuffer();

@@ -1,5 +1,7 @@
 # API reference · v0.1
 
+The console's **接口文档** navigation item (below **模型与服务**, `/?view=api`) provides expandable client endpoint documentation, request and response examples, and copyable cURL commands using the current gateway URL and published model IDs. The examples use `MODEL_DOCK_API_KEY` as an environment-variable placeholder; no saved credentials are included.
+
 Send `Authorization: Bearer <token>` to access management and inference endpoints. Management requires the local administrator token or a console session. Console assets, session-link redemption and `/healthz` are available before sign-in. Requests with bodies require `Content-Type: application/json`. The server only listens on `127.0.0.1` and checks the browser origin and Host header.
 
 ## Inference

@@ -1,5 +1,6 @@
 import { sse } from './events.mjs';
-import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes } from './image-options.mjs';
+import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes } from './image-options.mjs';
+import { apiDocsPage } from './api-docs.mjs';
 
 const $ = selector => document.querySelector(selector);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -11,6 +12,7 @@ const icons = {
   dock: '<path d="M4 5h16v5H4zM4 14h16v5H4zM8 7.5h.01M8 16.5h.01"/>',
   plug: '<path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/>',
   models: '<path d="m12 3 9 5-9 5-9-5zM3 12l9 5 9-5M3 16l9 5 9-5"/>',
+  docs: '<path d="M5 3h10l4 4v14H5zM14 3v5h5M8 12h8M8 16h6"/>',
   play: '<path d="m8 5 11 7-11 7z"/>',
   key: '<circle cx="8" cy="9" r="4"/><path d="m11 12 9 9m-5-5 3-3m-1 5 3-3"/>',
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
@@ -34,7 +36,9 @@ const types = {
   ollama: { name: 'Ollama', icon: 'computer', description: '发现并使用 Ollama 上已安装的模型。', addLabel: '添加 Ollama', defaultName: '本机 Ollama', baseUrl: 'http://127.0.0.1:11434' },
   codex: { name: 'Codex', icon: 'terminal', description: '连接本机已登录的 Codex CLI。', addLabel: '添加 Codex', defaultName: '本机 Codex', baseUrl: '' }
 };
-const views = { connections: ['连接与凭证', 'plug'], models: ['模型与服务', 'models'], playground: ['调用测试', 'play'], keys: ['项目访问', 'key'] };
+const views = { connections: ['连接与凭证', 'plug'], models: ['模型与服务', 'models'], api: ['接口文档', 'docs'], playground: ['调用测试', 'play'], keys: ['项目访问', 'key'] };
+const expandedApiEndpoints = new Set();
+const apiImageOptions = { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes };
 const settingsKey = 'model-dock-publication-draft';
 const storedSessionKey = 'model-dock-console-session';
 const manualTokenKey = 'model-dock-token';
@@ -180,8 +184,14 @@ function render() {
   const scroll = $('#catalog-table')?.scrollLeft || 0;
   const active = document.activeElement;
   const focus = active?.dataset?.catalogFocus;
+  const apiFocus = active?.matches('.api-endpoint > summary') ? active.parentElement.dataset.apiId : null;
+  const apiEndpoints = document.querySelectorAll('.api-endpoint');
+  if (apiEndpoints.length) {
+    expandedApiEndpoints.clear();
+    for (const endpoint of apiEndpoints) if (endpoint.open) expandedApiEndpoints.add(endpoint.dataset.apiId);
+  }
   const searchSelection = focus === 'search' ? [active.selectionStart, active.selectionEnd] : null;
-  $('#app').innerHTML = `<div class="shell reference-layout"><aside class="sidebar"><div class="brand"><span class="brand-mark">${icon('dock')}</span>Model Dock</div><div class="sidebar-sub">Model supply & access.</div><div class="nav-label">服务端 / SERVER</div><nav class="nav" aria-label="主导航">${Object.entries(views).map(([id, [name, symbol]]) => `<button data-view="${id}" class="${view === id ? 'active' : ''}" ${view === id ? 'aria-current="page"' : ''}>${icon(symbol)}${name}</button>`).join('')}</nav><div class="sidebar-bottom"><p><span class="local-dot"></span>本机网关</p><small>v${escape(state.version)} · 127.0.0.1</small><div><button class="quiet" data-action="logout">退出管理会话</button></div></div></aside><div class="main"><header class="topbar"><div class="crumb"><span>工作台</span><span>/</span><strong>${current[0]}</strong></div><span class="pill"><span class="local-dot"></span>本地运行</span></header><main class="page">${view === 'connections' ? connectionsPage() : view === 'models' ? modelsPage() : view === 'playground' ? playgroundPage() : keysPage()}<p class="footer-note">模型与凭证由你掌握 · Model Dock</p></main></div></div>`;
+  $('#app').innerHTML = `<div class="shell reference-layout"><aside class="sidebar"><div class="brand"><span class="brand-mark">${icon('dock')}</span>Model Dock</div><div class="sidebar-sub">Model supply & access.</div><div class="nav-label">服务端 / SERVER</div><nav class="nav" aria-label="主导航">${Object.entries(views).map(([id, [name, symbol]]) => `<button data-view="${id}" class="${view === id ? 'active' : ''}" ${view === id ? 'aria-current="page"' : ''}>${icon(symbol)}${name}</button>`).join('')}</nav><div class="sidebar-bottom"><p><span class="local-dot"></span>本机网关</p><small>v${escape(state.version)} · 127.0.0.1</small><div><button class="quiet" data-action="logout">退出管理会话</button></div></div></aside><div class="main"><header class="topbar"><div class="crumb"><span>工作台</span><span>/</span><strong>${current[0]}</strong></div><span class="pill"><span class="local-dot"></span>本地运行</span></header><main class="page">${view === 'connections' ? connectionsPage() : view === 'models' ? modelsPage() : view === 'api' ? apiDocsPage(state, apiImageOptions, expandedApiEndpoints) : view === 'playground' ? playgroundPage() : keysPage()}<p class="footer-note">模型与凭证由你掌握 · Model Dock</p></main></div></div>`;
   if (view === 'models') {
     const catalog = $('#catalog-table');
     applyCatalogWidths();
@@ -190,6 +200,7 @@ function render() {
     if (searchSelection) $('#catalog-search').setSelectionRange(...searchSelection);
   }
   if (view === 'playground') playImages.set($('#play-form'), { references: [], reading: false, result: null });
+  if (view === 'api' && apiFocus) document.querySelector(`.api-endpoint[data-api-id="${apiFocus}"] > summary`)?.focus({ preventScroll: true });
 }
 
 function focusCatalogControl(key) {
@@ -1013,6 +1024,7 @@ document.addEventListener('click', async event => {
     }
     if (action === 'copy-endpoint') { await navigator.clipboard.writeText(state.baseUrl); toast('地址已复制。'); }
     if (action === 'copy-example') { await navigator.clipboard.writeText($('#example-code').textContent); toast('接入示例已复制。'); }
+    if (action === 'copy-api-example') { await navigator.clipboard.writeText(document.getElementById(button.dataset.codeId).textContent); toast('接口示例已复制。'); }
     if (action === 'add-connection') {
       if (more?.contains(button)) {
         more.open = false;

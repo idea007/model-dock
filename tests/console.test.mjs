@@ -81,7 +81,8 @@ test('console: login, connection discovery, model publication, scoped key and JS
   });
   const source = (await fs.readFile(new URL('../apps/console/app.mjs', import.meta.url), 'utf8'))
     .replace("'./events.mjs'", JSON.stringify(new URL('../packages/protocol/events.mjs', import.meta.url).href))
-    .replace("'./image-options.mjs'", JSON.stringify(new URL('../packages/protocol/image-options.mjs', import.meta.url).href));
+    .replace("'./image-options.mjs'", JSON.stringify(new URL('../packages/protocol/image-options.mjs', import.meta.url).href))
+    .replace("'./api-docs.mjs'", JSON.stringify(new URL('../apps/console/api-docs.mjs', import.meta.url).href));
   module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
   const click = selector => { const element = document.querySelector(selector); assert.ok(element, selector); element.click(); };
   const fill = (name, value) => { const field = document.querySelector(`[name="${name}"]`); assert.ok(field, name); field.value = value; };
@@ -98,6 +99,7 @@ test('console: login, connection discovery, model publication, scoped key and JS
   fill('token', app.admin); submit('#login-form');
   await until(() => document.querySelector('.shell'));
   assert.equal(document.querySelector('h1').textContent, '连接与凭证');
+  assert.deepEqual([...document.querySelectorAll('.nav button')].map(button => button.textContent), ['连接与凭证', '模型与服务', '接口文档', '调用测试', '项目访问']);
   assert.ok(document.querySelector('.page > section').classList.contains('connections-endpoint'));
   assert.equal(document.querySelector('.stats'), null);
   assert.deepEqual([...document.querySelectorAll('.provider-group h3')].map(heading => heading.textContent), ['模型 API', 'Ollama', 'Codex']);
@@ -105,6 +107,25 @@ test('console: login, connection discovery, model publication, scoped key and JS
   for (const type of ['openai', 'ollama', 'codex']) assert.ok(document.querySelector(directAdd(type)));
   click('.connections-endpoint [data-action="copy-endpoint"]');
   assert.equal(clipboard, `${app.origin}/v1`);
+  click('.nav [data-view="api"]');
+  assert.equal(win.location.search, '?view=api');
+  assert.equal(document.querySelector('h1').textContent, '接口文档');
+  assert.equal(document.querySelectorAll('.api-endpoint').length, 4);
+  assert.equal(document.querySelectorAll('.api-endpoint[open]').length, 0);
+  assert.match(document.querySelector('[data-api-id="chat"]').textContent, /当前没有可用的文本模型/);
+  assert.match(document.querySelector('#api-code-health-request').textContent, new RegExp(`${app.origin}/healthz`));
+  assert.doesNotMatch(document.querySelector('#api-code-health-request').textContent, /Authorization/);
+  click('[data-api-id="models"] > summary');
+  click('[data-api-id="chat"] > summary');
+  assert.equal(document.querySelectorAll('.api-endpoint[open]').length, 2, 'endpoints expand independently');
+  click('[data-code-id="api-code-models-request"]');
+  assert.equal(clipboard, `curl '${app.origin}/v1/models' \\\n  -H "Authorization: Bearer $MODEL_DOCK_API_KEY"`);
+  click('.nav [data-view="connections"]');
+  click('.nav [data-view="api"]');
+  assert.equal(document.querySelectorAll('.api-endpoint[open]').length, 2, 'navigation preserves expanded endpoints');
+  click('[data-api-id="models"] > summary');
+  assert.equal(document.querySelector('[data-api-id="models"]').open, false);
+  click('.nav [data-view="connections"]');
   click('[data-action="add-connection"][data-type="openai"]');
   fill('name', '测试 API'); fill('baseUrl', `${upstream.origin}/v1`); fill('apiKey', 'fixture-upstream'); submit('#modal-form');
   await modalDone();
@@ -189,6 +210,17 @@ test('console: login, connection discovery, model publication, scoped key and JS
   assert.deepEqual((await app.request('/v1/models', 'GET', undefined, key)).data.data.map(item => item.id), [model.id]);
   assert.ok(document.querySelector('#dialog').open, 'new token dialog survives the prior dialog close event');
   submit('#modal-form'); await modalDone();
+  const callsBeforeDocs = upstream.calls.length;
+  click('.nav [data-view="api"]');
+  assert.equal(document.querySelector('[data-api-id="chat"]').open, true);
+  assert.equal(document.querySelector('[data-api-id="models"]').open, false);
+  click('[data-code-id="api-code-chat-request"]');
+  assert.ok(clipboard.includes(`${app.origin}/v1/chat/completions`));
+  const exampleBody = JSON.parse(clipboard.match(/-d '([\s\S]+)'$/)[1]);
+  assert.equal(exampleBody.model, model.id, 'example uses the currently published model ID');
+  assert.deepEqual(exampleBody.messages, [{ role: 'user', content: '你好，请介绍一下你自己。' }]);
+  for (const secret of [app.admin, key, 'fixture-upstream']) assert.ok(!document.querySelector('.api-docs').textContent.includes(secret), 'documentation never embeds stored credentials');
+  assert.equal(upstream.calls.length, callsBeforeDocs, 'browsing and copying documentation does not invoke providers');
   click('[data-view="playground"]'); fill('model', model.id); fill('prompt', '你好'); submit('#play-form');
   await until(() => document.querySelector('#response-status').textContent === '已完成');
   assert.equal(document.querySelector('#response-output').textContent, '你好，来自测试上游。');
