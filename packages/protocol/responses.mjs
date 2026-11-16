@@ -1,6 +1,6 @@
 import { exact, fail } from './index.mjs';
 
-export const RESPONSES_PARAMS = ['model', 'input', 'instructions', 'stream', 'store', 'tools', 'tool_choice', 'parallel_tool_calls'];
+export const RESPONSES_PARAMS = ['model', 'input', 'instructions', 'stream', 'store', 'max_output_tokens', 'tools', 'tool_choice', 'parallel_tool_calls'];
 
 function messageFromItem(item) {
   exact(item, ['type', 'role', 'content', 'id', 'status']);
@@ -84,12 +84,16 @@ export function responsesToChat(body) {
     fail('This endpoint hands off at most one function per request.', 'unsupported_parameter', 'parallel_tool_calls');
   }
   if (body.instructions != null && typeof body.instructions !== 'string') fail('Use string instructions.', 'invalid_request', 'instructions');
+  if (body.max_output_tokens !== undefined && (!Number.isSafeInteger(body.max_output_tokens) || body.max_output_tokens < 1 || body.max_output_tokens > 1_000_000)) {
+    fail('max_output_tokens must be an integer between 1 and 1000000.', 'invalid_request', 'max_output_tokens');
+  }
   const messages = inputMessages(body.input);
   if (body.instructions) {
     if (messages.length === 2048) fail('Leave room for instructions in the 2048-message limit.', 'invalid_request', 'input');
     messages.unshift({ role: 'system', content: body.instructions });
   }
   const request = { model: body.model, messages, stream: body.stream };
+  if (body.max_output_tokens !== undefined) request.max_completion_tokens = body.max_output_tokens;
   if (body.tools !== undefined) {
     if (!Array.isArray(body.tools) || body.tools.length > 128) fail('Use an array of up to 128 functions.', 'invalid_request', 'tools');
     request.tools = body.tools.map(tool => {

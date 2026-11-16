@@ -11,7 +11,8 @@ export async function fetchUpstream(url, options = {}) {
       }
       const authFailed = response.status === 401 || response.status === 403;
       throw new GatewayError(`Upstream rejected the request (HTTP ${response.status}).`, authFailed || response.status >= 500 ? 502 : 400,
-        authFailed ? 'upstream_auth_failed' : 'upstream_rejected');
+        authFailed ? 'upstream_auth_failed' : 'upstream_rejected', null,
+        { retryAfter: response.status >= 500 ? normalizeRetryAfter(response.headers.get('retry-after')) : undefined });
     }
     return response;
   } catch (error) {

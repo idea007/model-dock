@@ -1,6 +1,7 @@
 import { sse } from './events.mjs';
 import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes, maxInferenceRequestBytes } from './image-options.mjs';
 import { apiDocsPage } from './api-docs.mjs';
+import { money, usagePage } from './usage.mjs';
 import { LocalizedError, dateTime, duration, errorText, initLanguage, language, languagePicker, languageSeparator, number, requestMetadata, selectLanguage, t } from '../../packages/ui/i18n.mjs';
 
 const titleKey = 'console.documentTitle';
@@ -19,6 +20,7 @@ const icons = {
   docs: '<path d="M5 3h10l4 4v14H5zM14 3v5h5M8 12h8M8 16h6"/>',
   play: '<path d="m8 5 11 7-11 7z"/>',
   key: '<circle cx="8" cy="9" r="4"/><path d="m11 12 9 9m-5-5 3-3m-1 5 3-3"/>',
+  usage: '<path d="M4 20h16M7 16v-5m5 5V5m5 11V9"/>',
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   up: '<path d="M12 19V5m-5 5 5-5 5 5"/>',
@@ -50,8 +52,10 @@ function providerType(id) {
     defaultName: t(provider.defaultName)
   };
 }
-const views = { connections: ['console.connections', 'plug'], models: ['console.models', 'models'], api: ['common.apiDocs', 'docs'], playground: ['console.playground', 'play'], keys: ['console.projectAccess', 'key'] };
+const views = { connections: ['console.connections', 'plug'], models: ['console.models', 'models'], api: ['common.apiDocs', 'docs'], playground: ['console.playground', 'play'], keys: ['console.projectAccess', 'key'], usage: ['usage.title', 'usage'] };
 const expandedApiEndpoints = new Set();
+const usageFilters = { days: 7, project: '', model: '', priceModel: '' };
+let usageReport, usageError, usageRequest;
 const apiImageOptions = { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes, maxInferenceRequestBytes };
 const settingsKey = 'model-dock-publication-draft';
 const storedSessionKey = 'model-dock-console-session';
@@ -102,17 +106,20 @@ try {
 } catch { sessionStorage.removeItem(settingsKey); }
 const usable = model => model.enabled && model.available !== false && state.connections.some(connection => connection.id === model.connectionId && connection.enabled);
 const usableModels = () => state.models.filter(usable);
-const availableChoices = () => usableModels().map(model => ({
+const callableModels = () => [...usableModels(), ...(state.pools || []).filter(pool => pool.enabled && pool.members.some(member => member.available))];
+const modelById = id => state.models.find(model => model.id === id) || state.pools?.find(pool => pool.id === id);
+const availableChoices = () => callableModels().map(model => ({
   id: model.id,
-  name: `${model.name} · ${state.connections.find(c => c.id === model.connectionId)?.name}`,
+  name: `${model.name} · ${model.members ? t('pools.source') : state.connections.find(c => c.id === model.connectionId)?.name}`,
   image: imageModel(model)
 }));
-const modelLabel = id => state.models.find(model => model.id === id)?.name || id;
+const modelLabel = id => modelById(id)?.name || id;
 const timestamp = value => value ? dateTime(value) : t('common.notChecked');
 function toast(message, error = false) { clearTimeout(toastTimer); $('#toast').textContent = message; $('#toast').className = `show${error ? ' error' : ''}`; toastTimer = setTimeout(() => { $('#toast').className = ''; }, error ? 7000 : 3500); }
-async function api(url, options = {}) {
+async function api(url, options = {}, raw = false) {
   const requestToken = token;
   const response = await fetch(url, { ...options, headers: { ...(requestToken ? { authorization: `Bearer ${requestToken}` } : {}), ...(options.body ? { 'content-type': 'application/json' } : {}), ...options.headers }, body: options.body ? JSON.stringify(options.body) : undefined });
+  if (raw && response.ok) return response;
   const data = await response.json();
   if (!response.ok) {
     if (response.status === 401 && url === '/admin/state' && requestToken === token) {
@@ -141,7 +148,48 @@ async function load(renderPage = true) {
   const next = await api('/admin/state');
   if (token !== currentToken) return;
   state = next;
-  if (renderPage) render();
+  if (renderPage) renderView();
+}
+
+function usageUrl(format = 'json') {
+  const { days, project, model } = usageFilters;
+  return `/admin/usage?${new URLSearchParams({ days, project, model, format })}`;
+}
+
+async function refreshUsage() {
+  if (!token || !state) return render();
+  usageRequest?.abort();
+  const request = new AbortController();
+  usageRequest = request;
+  usageError = undefined;
+  render();
+  try {
+    const report = await api(usageUrl(), { signal: request.signal });
+    if (usageRequest === request) usageReport = report;
+  } catch (error) {
+    if (!request.signal.aborted) usageError = error;
+  } finally {
+    if (usageRequest === request) {
+      usageRequest = undefined;
+      if (view === 'usage') render();
+    }
+  }
+}
+
+function renderView() {
+  if (view === 'usage') { void refreshUsage(); return; }
+  usageRequest?.abort();
+  render();
+}
+
+async function exportUsage() {
+  const response = await api(usageUrl('csv'), {}, true);
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'model-dock-usage.csv';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 async function mutate(url, method, body = {}, revision = state.revision) {
   if (busy || catalogRefresh) throw new Error(t('common.busy'));
@@ -202,6 +250,7 @@ function render() {
   const scroll = $('#catalog-table')?.scrollLeft || 0;
   const active = document.activeElement;
   const focus = active?.dataset?.catalogFocus;
+  const usageFocus = active?.dataset?.usageFocus;
   const apiFocus = active?.matches('.api-endpoint > summary') ? active.parentElement.dataset.apiId : null;
   const apiEndpoints = document.querySelectorAll('.api-endpoint');
   if (apiEndpoints.length) {
@@ -211,8 +260,10 @@ function render() {
   const searchSelection = focus === 'search' ? [active.selectionStart, active.selectionEnd] : null;
   const page = view === 'connections' ? connectionsPage()
     : view === 'models' ? modelsPage()
-    : view === 'api' ? apiDocsPage({ baseUrl: state.baseUrl, models: usableModels(), version: state.version, expanded: expandedApiEndpoints }, apiImageOptions)
-    : view === 'playground' ? playgroundPage() : keysPage();
+    : view === 'api' ? apiDocsPage({ baseUrl: state.baseUrl, models: callableModels(), version: state.version, expanded: expandedApiEndpoints }, apiImageOptions)
+    : view === 'playground' ? playgroundPage()
+    : view === 'usage' ? usagePage({ state, report: usageReport, filters: usageFilters, loading: Boolean(usageRequest), error: usageError }, escape)
+    : keysPage();
   $('#app').innerHTML = `<div class="shell reference-layout">
     <aside class="sidebar">
       <div class="brand"><span class="brand-mark">${icon('dock')}</span>Model Dock</div>
@@ -243,6 +294,7 @@ function render() {
   }
   if (view === 'playground') playImages.set($('#play-form'), { references: [], reading: false, result: null });
   if (view === 'api' && apiFocus) document.querySelector(`.api-endpoint[data-api-id="${apiFocus}"] > summary`)?.focus({ preventScroll: true });
+  if (view === 'usage' && usageFocus) $(`[data-usage-focus="${usageFocus}"]`)?.focus({ preventScroll: true });
 }
 
 function changeLanguage(next) {
@@ -593,10 +645,24 @@ function catalogConnection(connection, models, total) {
           aria-busy="${checking}" ${busy || catalogRefresh || !connection.enabled ? 'disabled' : ''}>${icon('cycle')}</button>
       </div>
       ${detail ? `<p class="catalog-runtime-error">${escape(detail)}</p>` : ''}
+      ${connectionDiagnostics(connection, lastCheck)}
       ${connection.type === 'openai' ? `<button class="catalog-text" data-action="add-model" data-id="${escape(connection.id)}" ${busy || catalogRefresh ? 'disabled' : ''}>${t('console.registerModel')}</button>` : ''}
     </div>
     <div>${models.length ? models.map(model => catalogModel(model, connection)).join('') : `<p class="catalog-empty" title="${t('console.noDiscoveredModels')}">${catalogDash}</p>`}</div>
   </section>`;
+}
+
+function connectionDiagnostics(connection, lastCheck) {
+  const discovery = connection.status === 'connected' ? 'usage.checkPassed'
+    : connection.status === 'error' ? 'common.failed' : 'common.notChecked';
+  const latest = state.requests.find(row => row.connectionId === connection.id);
+  const outcomes = { succeeded: 'common.completed', failed: 'common.failed', cancelled: 'console.cancelled' };
+  const running = state.active.filter(row => row.connectionId === connection.id || connection.type === 'codex' && row.provider === 'codex').length;
+  return `<div class="catalog-operations">
+    <span title="${escape(lastCheck)}">${t('usage.discovery', t(discovery))}</span>
+    <span title="${escape(latest ? timestamp(latest.finishedAt || latest.startedAt) : '')}">${t('usage.latestInference', latest ? t(outcomes[latest.status]) : t('usage.noCalls'))}</span>
+    <span>${t('usage.concurrentSlots', running, connection.maxConcurrency)}</span>
+  </div>`;
 }
 
 function modelTable() {
@@ -650,6 +716,68 @@ function rememberCatalogWidths() {
   try { sessionStorage.setItem('model-dock-catalog-columns', JSON.stringify(Object.fromEntries(catalogWidths))); } catch {}
 }
 
+function poolDeployments(pool) {
+  const groups = new Map();
+  const connections = new Map(state.connections.map(connection => [connection.id, connection]));
+  for (const model of usableModels()) {
+    const connection = connections.get(model.connectionId);
+    const capability = model.capability ?? null;
+    if (pool && (model.nativeId !== pool.nativeId || connection.type !== pool.providerType || capability !== pool.capability)) continue;
+    const key = JSON.stringify([model.nativeId, connection.type, capability]);
+    if (!groups.has(key)) groups.set(key, { title: `${model.nativeId} · ${providerType(connection.type).name}`, members: [] });
+    groups.get(key).members.push({ id: model.id, label: connection.name, baseUrl: connection.baseUrl });
+  }
+  if (pool) {
+    const group = groups.values().next().value || { title: pool.nativeId, members: [] };
+    group.members = [
+      ...pool.members.map(member => group.members.find(item => item.id === member.id) ||
+        { id: member.id, label: `${member.connectionName || member.id} · ${t('pools.unavailable')}` }),
+      ...group.members.filter(member => !pool.modelIds.includes(member.id))
+    ];
+    return [group];
+  }
+  return [...groups.values()].filter(group => new Set(group.members.map(member => member.baseUrl)).size >= 2);
+}
+
+function poolsSection(pending) {
+  const pools = state.pools || [];
+  const canAdd = poolDeployments().length > 0;
+  return `<section aria-labelledby="pools-heading">
+    <div class="section-header between wrap"><div><h2 id="pools-heading">${t('pools.title')}</h2><p>${t('pools.description')}</p></div>
+      <button type="button" data-action="add-pool" class="small-button" ${pending || !canAdd ? 'disabled' : ''}>${t('pools.create')}</button></div>
+    ${!canAdd ? `<p class="catalog-muted">${t('pools.deploymentHelp')}</p>` : ''}
+    ${pools.length ? `<div class="table-wrap"><table><thead><tr><th>${t('pools.source')}</th><th>${t('common.model')}</th>
+      <th>${t('pools.members')}</th><th>${t('pools.status')}</th><th></th></tr></thead><tbody>
+      ${pools.map(pool => `<tr><td><strong>${escape(pool.name)}</strong><code>${escape(pool.id)}</code></td>
+        <td><code>${escape(pool.nativeId)}</code></td><td>${pool.members.map(member => {
+          const status = !member.available ? t('pools.unavailable') : member.cooldownUntil
+            ? t('pools.cooldown', dateTime(member.cooldownUntil)) : t('pools.ready');
+          return `<div>${escape(member.connectionName || member.id)} <small>${escape(status)}</small></div>`;
+        }).join('')}</td>
+        <td>${t(pool.enabled ? 'common.enabled' : 'common.disabled')}</td><td><div class="row wrap">
+          <button type="button" class="quiet small-button" data-action="edit-pool" data-id="${escape(pool.id)}" ${pending ? 'disabled' : ''}>${t('pools.edit')}</button>
+          <button type="button" class="quiet danger small-button" data-action="delete-pool" data-id="${escape(pool.id)}" ${pending ? 'disabled' : ''}>${t('pools.remove')}</button>
+        </div></td></tr>`).join('')}</tbody></table></div>` : ''}</section>`;
+}
+
+function poolDialog(pool) {
+  const groups = poolDeployments(pool);
+  const revision = state.revision;
+  showDialog(t(pool ? 'pools.edit' : 'pools.create'), t('pools.deploymentHelp'), `
+    <label>${t('pools.name')}<input name="name" maxlength="100" required value="${escape(pool?.name)}"></label>
+    <div class="checklist pool-deployments">${groups.map(group => `<fieldset><legend>${escape(group.title)}</legend>
+      ${group.members.map(member => `<label class="checkbox-label"><input type="checkbox" name="modelIds" value="${escape(member.id)}"
+        ${pool?.modelIds.includes(member.id) ? 'checked' : ''}>${escape(member.label)}${member.baseUrl ? ` <code>${escape(member.baseUrl)}</code>` : ''}</label>`).join('')}
+      </fieldset>`).join('')}</div>
+    <label class="checkbox-label"><input type="checkbox" name="enabled" ${pool?.enabled !== false ? 'checked' : ''}>${t('pools.publish')}</label>`,
+  t('common.saveChanges'), async form => {
+    await mutate(pool ? `/admin/pools/${encodeURIComponent(pool.id)}` : '/admin/pools', pool ? 'PATCH' : 'POST',
+      { name: form.get('name'), modelIds: form.getAll('modelIds'), enabled: form.has('enabled') }, revision);
+    advanceSettingsDraft(revision);
+    $('#dialog').close(); render(); toast(t('pools.saved'));
+  });
+}
+
 function modelsPage() {
   const dirty = settingsDraft?.changes.size || 0;
   const conflict = settingsDraft && settingsDraft.revision !== state.revision;
@@ -692,7 +820,7 @@ function modelsPage() {
       ${invalidEfforts && !conflict ? `<p class="catalog-feedback" role="status">${t('console.unavailablePendingEffort')}</p>` : ''}
       ${settingsError ? `<p class="catalog-feedback catalog-warning" role="alert">${escape(settingsError)}</p>` : ''}
       <div id="catalog-table" class="catalog-scroll" role="region" tabindex="0" aria-label="${t('console.catalogRegion')}">${modelTable()}</div>
-    </section>`;
+    </section>${poolsSection(pending)}`;
 }
 
 function advanceSettingsDraft(previousRevision) {
@@ -815,7 +943,7 @@ function renderImageReferences(form) {
   $('#play-reference-count').textContent = `${references.length} / ${maxImageReferences}`;
   form.querySelector('[data-action="add-reference"]').disabled = references.length === maxImageReferences;
   $('#play-reference-hint').textContent = references.length ? t('console.referencePromptHelp') : t('console.imageFormats');
-  const image = imageModel(state.models.find(item => item.id === form.elements.model.value));
+  const image = imageModel(modelById(form.elements.model.value));
   form.elements.prompt.placeholder = playgroundPlaceholder(image, image ? references.length : 0);
 }
 function changeImageReferences(button) {
@@ -904,8 +1032,90 @@ function snippet(choice = availableChoices()[0]) {
   const code = exampleCode(choice);
   return `<div class="code-card"><div class="between"><h3>${t('console.curlExample')}</h3><button class="small-button" data-action="copy-example">${t('console.copyButton', icon('copy'))}</button></div><pre id="example-code">${escape(code)}</pre></div>`;
 }
+const keyLimitLabels = { requestsPerMinute: 'usage.requestsPerMinute', maxConcurrentRequests: 'usage.concurrentRequests' };
+
+function keyLimitFields(limits) {
+  return `<div class="form-grid">${Object.entries(keyLimitLabels).map(([name, label]) =>
+    `<label>${t(label)}<input name="${name}" type="number" min="1" step="1" placeholder="${t('usage.unlimited')}" value="${limits?.[name] ?? ''}"></label>`).join('')}</div>`;
+}
+
+function readKeyLimits(form) {
+  return Object.fromEntries(Object.keys(keyLimitLabels).map(key => [key, form.get(key) ? Number(form.get(key)) : null]));
+}
+
+function budgetFields(budget) {
+  return `<div class="form-grid">
+    <label>${t('usage.monthlyBudget')}<input name="budgetAmount" type="number" min="0.000001" step="0.000001"
+      placeholder="${t('usage.unlimited')}" value="${budget?.amount ?? ''}"></label>
+    <label>${t('usage.currency')}<input name="budgetCurrency" maxlength="3" pattern="[A-Za-z]{3}" placeholder="CNY"
+      value="${escape(budget?.currency)}"></label></div>
+    <small>${t('usage.budgetHelp')}</small>`;
+}
+
+function readBudget(form) {
+  if (!form.get('budgetAmount')) return null;
+  const currency = form.get('budgetCurrency').trim().toUpperCase();
+  if (!currency) throw new LocalizedError('errors.invalidProjectBudget');
+  return { currency, amount: Number(form.get('budgetAmount')) };
+}
+
+function budgetCell(budget) {
+  if (!budget) return t('usage.unlimited');
+  if (!budget.available) return `<span class="tag error">${t('errors.budgetLedgerUnavailable')}</span>`;
+  const fmt = value => money(value, budget.currency);
+  return `<strong>${t('usage.budgetRemaining', fmt(budget.remaining), fmt(budget.amount))}</strong>
+    <small>${t('usage.budgetSettled', escape(budget.period), fmt(budget.settled))}</small>
+    ${budget.reserved ? `<small>${t('usage.budgetReserved', fmt(budget.reserved))}</small>` : ''}
+    ${budget.unconfirmed ? `<small>${t('usage.budgetUnconfirmed', fmt(budget.unconfirmed))}</small>` : ''}`;
+}
+
+function keyTable() {
+  return `<div class="table-wrap"><table><thead><tr>${['console.project', 'console.key', 'console.keyScope', 'usage.limits', 'usage.monthlyBudget', 'console.createdAt'].map(label =>
+    `<th>${t(label)}</th>`).join('')}<th></th></tr></thead><tbody>${state.keys.map(key => {
+    const limits = [key.limits?.requestsPerMinute && t('usage.rpmValue', number(key.limits.requestsPerMinute)),
+      key.limits?.maxConcurrentRequests && t('usage.concurrentValue', number(key.limits.maxConcurrentRequests))].filter(Boolean);
+    const scope = key.models.includes('*') ? `<span class="tag blue">${t('console.allPublished')}</span>`
+      : key.models.map(model => `<span class="tag">${escape(modelLabel(model))}</span>`).join(' ');
+    return `<tr><td><strong>${escape(key.name)}</strong></td><td><code>${escape(key.prefix)}…</code></td><td>${scope}</td>
+      <td>${limits.length ? limits.join(' · ') : t('usage.unlimited')}</td><td class="key-budget">${budgetCell(key.budgetUsage)}</td><td><small>${escape(timestamp(key.createdAt))}</small></td>
+      <td><div class="row wrap"><button class="quiet small-button" data-action="edit-key-limits" data-id="${escape(key.id)}">${t('usage.editLimits')}</button>
+        <button class="quiet small-button" data-action="edit-key-budget" data-id="${escape(key.id)}">${t('usage.editBudget')}</button>
+        <button class="quiet danger small-button" data-action="delete-key" data-id="${escape(key.id)}">${t('console.revoke')}</button></div></td></tr>`;
+  }).join('')}</tbody></table></div>`;
+}
+
 function keysPage() {
-  return `<div class="between page-heading"><div><div class="eyebrow">${t('console.projectAccessEyebrow')}</div><h1>${t('console.projectAccessTitle')}</h1><p>${t('console.projectAccessHelp')}</p></div><button class="primary" data-action="add-key">${t('console.createKeyButton', icon('plus'))}</button></div><div class="endpoint"><div><h3>${t('console.gatewayBaseUrl')}</h3><code>${escape(state.baseUrl)}</code><p>${t('console.gatewayBaseUrlHelp')}</p></div><button data-action="copy-endpoint">${t('console.copyAddressButton', icon('copy'))}</button></div><div class="section-header"><h2>${t('common.projectKey')} <span class="muted">${state.keys.length}</span></h2></div>${state.keys.length ? `<div class="table-wrap"><table><thead><tr><th>${t('console.project')}</th><th>${t('console.key')}</th><th>${t('console.keyScope')}</th><th>${t('console.createdAt')}</th><th></th></tr></thead><tbody>${state.keys.map(key => `<tr><td><strong>${escape(key.name)}</strong></td><td><code>${escape(key.prefix)}…</code></td><td>${key.models.includes('*') ? `<span class="tag blue">${t('console.allPublished')}</span>` : key.models.map(model => `<span class="tag">${escape(modelLabel(model))}</span>`).join(' ')}</td><td><small>${escape(timestamp(key.createdAt))}</small></td><td><button class="quiet danger small-button" data-action="delete-key" data-id="${key.id}">${t('console.revoke')}</button></td></tr>`).join('')}</tbody></table></div>` : empty(t('console.firstProjectKey'), t('console.firstProjectKeyHelp'), 'key')}<div class="info-box">${icon('info')}<div><strong>${t('console.localAppConnection')}</strong>${t('console.projectKeyHandling')}</div></div>${snippet()}`;
+  return `<div class="between page-heading"><div><div class="eyebrow">${t('console.projectAccessEyebrow')}</div><h1>${t('console.projectAccessTitle')}</h1><p>${t('console.projectAccessHelp')}</p></div><button class="primary" data-action="add-key">${t('console.createKeyButton', icon('plus'))}</button></div><div class="endpoint"><div><h3>${t('console.gatewayBaseUrl')}</h3><code>${escape(state.baseUrl)}</code><p>${t('console.gatewayBaseUrlHelp')}</p></div><button data-action="copy-endpoint">${t('console.copyAddressButton', icon('copy'))}</button></div><div class="section-header"><h2>${t('common.projectKey')} <span class="muted">${state.keys.length}</span></h2></div>${state.keys.length ? keyTable() : empty(t('console.firstProjectKey'), t('console.firstProjectKeyHelp'), 'key')}<div class="info-box">${icon('info')}<div><strong>${t('console.localAppConnection')}</strong>${t('console.projectKeyHandling')}</div></div>${snippet()}`;
+}
+
+function usagePriceDialog(model) {
+  if (!model) return;
+  const price = model.usagePrice;
+  const rates = imageModel(model) ? [['perImage', 'usage.perImage']]
+    : [['inputPerMillion', 'usage.inputPrice'], ['outputPerMillion', 'usage.outputPrice']];
+  const bounds = imageModel(model) ? [] : [['maxInputTokens', 'usage.budgetInputBound'], ['maxOutputTokens', 'usage.budgetOutputBound']];
+  showDialog(t('usage.editPrice'), model.name, `
+    <label>${t('usage.currency')}<input name="currency" value="${price?.currency || ''}" maxlength="3" pattern="[A-Za-z]{3}" placeholder="CNY"></label>
+    ${rates.map(([name, label]) => `<label>${t(label)}<input type="number" min="0" step="any" name="${name}" value="${price?.[name] ?? ''}"></label>`).join('')}
+    ${bounds.length ? `<div class="form-grid">${bounds.map(([name, label]) =>
+      `<label>${t(label)}<input type="number" min="1" step="1" name="${name}" value="${price?.[name] ?? ''}"
+        placeholder="${escape(model[name] || (name === 'maxInputTokens' ? model.contextWindow : '') || '')}" ${model[name] ? 'disabled' : ''}></label>`).join('')}</div>
+      <small>${t('usage.budgetBoundsHelp')}</small>` : ''}
+    ${price ? `<label class="checkbox-label"><input type="checkbox" name="removePrice">${t('usage.removePrice')}</label>` : ''}`,
+  t('common.saveChanges'), async form => {
+    let nextPrice = null;
+    if (!form.has('removePrice')) {
+      const currency = form.get('currency').trim().toUpperCase();
+      if (!currency || rates.some(([name]) => form.get(name) === '')) throw new LocalizedError('usage.enterPrice');
+      nextPrice = { currency, ...Object.fromEntries(rates.map(([name]) => [name, Number(form.get(name))])) };
+      for (const [name] of bounds) {
+        const bound = model[name] ? price?.[name] : form.get(name);
+        if (bound) nextPrice[name] = Number(bound);
+      }
+    }
+    await mutate('/admin/usage/prices', 'PATCH', { modelId: model.id, price: nextPrice });
+    $('#dialog').close(); render(); toast(t('usage.priceSaved'));
+  });
 }
 function showDialog(title, description, fields, submitLabel, callback) {
   const dialog = $('#dialog');
@@ -935,7 +1145,7 @@ async function generate(form) {
   const draft = playImages.get(form);
   if (generation || draft.reading) return;
   const fields = new FormData(form);
-  const model = state.models.find(item => item.id === fields.get('model'));
+  const model = modelById(fields.get('model'));
   const image = imageModel(model);
   const streaming = !image && fields.has('stream');
   const prompt = fields.get('prompt');
@@ -1019,7 +1229,7 @@ function showPlayResponse(response, output = $('#response-output')) {
 }
 
 function updatePlayModel(form) {
-  const model = state.models.find(item => item.id === form.elements.model.value);
+  const model = modelById(form.elements.model.value);
   const image = imageModel(model);
   const draft = playImages.get(form);
   $('#play-image-options').hidden = $('#play-image-options').disabled = !image;
@@ -1031,6 +1241,12 @@ function updatePlayModel(form) {
   $('#example-code').textContent = exampleCode({ id: form.elements.model.value, image });
 }
 document.addEventListener('change', event => {
+  if (event.target.id === 'usage-price-model') usageFilters.priceModel = event.target.value;
+  const usageFilter = event.target.dataset?.usageFilter;
+  if (usageFilter) {
+    usageFilters[usageFilter] = usageFilter === 'days' ? Number(event.target.value) : event.target.value;
+    void refreshUsage();
+  }
   if (event.target.matches('#play-form [name="image_files"]')) {
     void addImageReferences(event.target).catch(error => toast(errorText(error), true));
     return;
@@ -1102,7 +1318,7 @@ document.addEventListener('click', async event => {
   if (button.dataset.language) { changeLanguage(button.dataset.language); return; }
   if (button.dataset.view) {
     if (generation) { toast(t('common.waitForRequest')); return; }
-    view = button.dataset.view; history.pushState(null, '', `${location.pathname}?view=${view}`); render(); return;
+    view = button.dataset.view; history.pushState(null, '', `${location.pathname}?view=${view}`); renderView(); return;
   }
   const action = button.dataset.action, id = button.dataset.id;
   if (!action) return;
@@ -1117,6 +1333,24 @@ document.addEventListener('click', async event => {
     }
     if (action === 'close-dialog') $('#dialog').close();
     if (action === 'refresh') { await load(); toast(t('console.statusRefreshed')); }
+    if (action === 'refresh-usage') await refreshUsage();
+    if (action === 'export-usage') { button.disabled = true; await exportUsage(); }
+    if (action === 'edit-usage-price') usagePriceDialog(state.models.find(model => model.id === $('#usage-price-model')?.value));
+    if (action === 'add-pool') poolDialog();
+    if (action === 'edit-pool') {
+      const pool = state.pools?.find(item => item.id === id);
+      if (pool) poolDialog(pool);
+    }
+    if (action === 'delete-pool') {
+      const pool = state.pools?.find(item => item.id === id);
+      if (!pool) return;
+      const revision = state.revision;
+      showDialog(t('pools.remove'), t('pools.removeHelp', pool.name), '', t('pools.remove'), async () => {
+        await mutate(`/admin/pools/${encodeURIComponent(id)}`, 'DELETE', {}, revision);
+        advanceSettingsDraft(revision);
+        $('#dialog').close(); render(); toast(t('console.actionComplete'));
+      });
+    }
     if (action === 'logout') {
       if (generation) { toast(t('common.waitForRequest')); return; }
       const sessions = new Set([readConsoleSession(), consoleSession].filter(Boolean));
@@ -1135,6 +1369,9 @@ document.addEventListener('click', async event => {
       settingsDraft = undefined;
       settingsError = catalogNotice = '';
       rememberSettings();
+      usageRequest?.abort();
+      usageRequest = usageReport = usageError = undefined;
+      Object.assign(usageFilters, { days: 7, project: '', model: '', priceModel: '' });
       state = null;
       login();
     }
@@ -1233,10 +1470,26 @@ document.addEventListener('click', async event => {
     }
     if (action === 'add-key') {
       const choices = availableChoices();
-      showDialog(t('console.createKeyTitle'), t('console.createKeyHelp'), `<label>${t('console.projectName')}<input name="name" placeholder="${t('console.projectNameExample')}" required></label><label>${t('console.authorizedModels')}</label><div class="checklist">${choices.map(item => `<label class="checkbox-label"><input type="checkbox" name="models" value="${escape(item.id)}">${escape(item.name)}</label>`).join('')}<label class="checkbox-label"><input type="checkbox" name="models" value="*">${t('console.allPublishedFuture')}</label></div>`, t('console.createKey'), async form => {
-        const result = await mutate('/admin/keys', 'POST', { name: form.get('name'), models: form.getAll('models') });
+      showDialog(t('console.createKeyTitle'), t('console.createKeyHelp'), `<label>${t('console.projectName')}<input name="name" placeholder="${t('console.projectNameExample')}" required></label><label>${t('console.authorizedModels')}</label><div class="checklist">${choices.map(item => `<label class="checkbox-label"><input type="checkbox" name="models" value="${escape(item.id)}">${escape(item.name)}</label>`).join('')}<label class="checkbox-label"><input type="checkbox" name="models" value="*">${t('console.allPublishedFuture')}</label></div>${keyLimitFields()}${budgetFields()}`, t('console.createKey'), async form => {
+        const result = await mutate('/admin/keys', 'POST', { name: form.get('name'), models: form.getAll('models'), limits: readKeyLimits(form), budget: readBudget(form) });
         $('#dialog').close(); render();
         showDialog(t('console.saveNewKey'), t('console.saveNewKeyHelp'), `<div class="token-box"><code id="new-token">${escape(result.token)}</code></div><button type="button" data-action="copy-token">${t('console.copyKeyButton', icon('copy'))}</button>`, t('console.confirmKeySaved'), async () => { $('#dialog').close(); });
+      });
+    }
+    if (action === 'edit-key-limits') {
+      const key = state.keys.find(item => item.id === id);
+      if (!key) return;
+      showDialog(t('usage.editLimits'), t('usage.keyLimitsHelp', key.name), keyLimitFields(key.limits), t('common.saveChanges'), async form => {
+        await mutate(`/admin/keys/${encodeURIComponent(id)}`, 'PATCH', { limits: readKeyLimits(form) });
+        $('#dialog').close(); render(); toast(t('usage.limitsSaved'));
+      });
+    }
+    if (action === 'edit-key-budget') {
+      const key = state.keys.find(item => item.id === id);
+      if (!key) return;
+      showDialog(t('usage.editBudget'), key.name, budgetFields(key.budget), t('common.saveChanges'), async form => {
+        await mutate(`/admin/keys/${encodeURIComponent(id)}`, 'PATCH', { budget: readBudget(form) });
+        $('#dialog').close(); render(); toast(t('usage.budgetSaved'));
       });
     }
     if (action === 'copy-token') { await navigator.clipboard.writeText($('#new-token').textContent); toast(t('console.projectKeyCopied')); }
@@ -1273,12 +1526,17 @@ const refreshTimer = setInterval(async () => {
   try {
     const next = await api('/admin/state');
     if (currentToken !== token || busy || catalogRefresh || generation || $('#dialog').open || view === 'playground' || next.revision < state.revision) return;
-    const changed = next.revision !== state.revision || view === 'models' && next.requests[0]?.id !== state.requests[0]?.id;
+    const runtimeChanged = next.requests[0]?.id !== state.requests[0]?.id
+      || next.active.map(row => row.id).join() !== state.active.map(row => row.id).join();
+    const poolStatus = snapshot => snapshot.pools?.flatMap(pool => pool.members.map(member => member.cooldownUntil)).join();
+    const budgets = snapshot => JSON.stringify(snapshot.keys.map(key => key.budgetUsage));
+    const changed = next.revision !== state.revision || view === 'models' && (runtimeChanged || poolStatus(next) !== poolStatus(state))
+      || view === 'keys' && budgets(next) !== budgets(state);
     state = next;
     if (changed) render();
   } catch {}
 }, 15_000);
-const popstate = () => { const next = new URLSearchParams(location.search).get('view') || 'connections'; if (views[next] && !generation) { view = next; render(); } };
+const popstate = () => { const next = new URLSearchParams(location.search).get('view') || 'connections'; if (views[next] && !generation) { view = next; renderView(); } };
 const consoleLinkChanged = () => {
   if (new URLSearchParams(location.hash.slice(1)).has('session')) location.reload();
 };
@@ -1288,6 +1546,7 @@ export function dispose() {
   clearInterval(refreshTimer);
   clearTimeout(toastTimer);
   generation?.abort();
+  usageRequest?.abort();
   window.removeEventListener('popstate', popstate);
   window.removeEventListener('hashchange', consoleLinkChanged);
 }

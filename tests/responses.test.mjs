@@ -213,7 +213,8 @@ test('Responses errors stay on the HTTP boundary until streaming starts', async 
   const attempts = [
     [{ store: true }, 'store'], [{ previous_response_id: 'resp_old' }, 'previous_response_id'],
     [{ conversation: 'conv_1' }, 'conversation'], [{ background: true }, 'background'],
-    [{ parallel_tool_calls: true }, 'parallel_tool_calls'], [{ max_output_tokens: 50 }, 'max_output_tokens'],
+    [{ parallel_tool_calls: true }, 'parallel_tool_calls'], [{ max_output_tokens: 0 }, 'max_output_tokens'],
+    [{ model: modelIds.codex, max_output_tokens: 50 }, 'max_output_tokens'],
     [{ input: [{ type: 'reasoning', encrypted_content: 'ignored' }] }, 'input'],
     [{ input: [userMessage([{ type: 'input_image', image_url: 'https://example.com/image.png' }])] }, 'input'],
     [{ tools: [{ type: 'web_search' }] }, 'tools'],

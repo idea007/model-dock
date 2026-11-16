@@ -43,7 +43,7 @@ function normalizeCatalog(data) {
     if (typeof row.id !== 'string' || !row.id || row.id.length > 512 || seen.has(row.id) || typeof row.source?.id !== 'string' || !row.source.id || row.source.id.length > 100) throw new GatewayError('此网关尚未提供接入端所需的模型元数据。', 502, 'invalid_catalog');
     seen.add(row.id);
     return { id: row.id, nativeId: row.id.split('/').slice(1).join('/') || row.id, name: typeof row.name === 'string' ? row.name.slice(0, 300) : row.id, connectionId: row.source.id,
-      source: { id: row.source.id, name: typeof row.source.name === 'string' ? row.source.name.slice(0, 100) : row.source.id, type: ['codex', 'ollama'].includes(row.source.type) ? row.source.type : 'openai' },
+      source: { id: row.source.id, name: typeof row.source.name === 'string' ? row.source.name.slice(0, 100) : row.source.id, type: ['codex', 'ollama', 'pool'].includes(row.source.type) ? row.source.type : 'openai' },
       capabilities: Object.fromEntries(['text', 'tools', 'structured', 'thinking', 'image_input'].map(key => [key, typeof row.capabilities?.[key] === 'boolean' ? row.capabilities[key] : null])),
       contextWindow: Number.isSafeInteger(row.context_window) && row.context_window > 0 ? row.context_window : null,
       reasoningEfforts: Array.isArray(row.reasoning_efforts) ? [...new Set(row.reasoning_efforts.filter(level => typeof level === 'string' && level.length <= 30))] : [],
@@ -135,7 +135,7 @@ export async function startDemo({ directory: dataDirectory, port = 4318 } = {}) 
           if (requestId) response.setHeader('x-request-id', requestId);
           if (!upstream.ok) {
             const failure = await upstream.json().catch(() => null);
-            const retryAfter = upstream.status === 429 && normalizeRetryAfter(upstream.headers.get('retry-after'));
+            const retryAfter = [429, 503].includes(upstream.status) && normalizeRetryAfter(upstream.headers.get('retry-after'));
             if (retryAfter) response.setHeader('retry-after', retryAfter);
             throw new GatewayError(failure?.error?.message || `网关请求失败（${upstream.status}）。`, upstream.status, failure?.error?.code || 'gateway_error', failure?.error?.param ?? null);
           }

@@ -83,6 +83,7 @@ test('console: login, connection discovery, model publication, scoped key and JS
     .replace("'./events.mjs'", JSON.stringify(new URL('../packages/protocol/events.mjs', import.meta.url).href))
     .replace("'./image-options.mjs'", JSON.stringify(new URL('../packages/protocol/image-options.mjs', import.meta.url).href))
     .replace("'./api-docs.mjs'", JSON.stringify(new URL('../apps/console/api-docs.mjs', import.meta.url).href))
+    .replace("'./usage.mjs'", JSON.stringify(new URL('../apps/console/usage.mjs', import.meta.url).href))
     .replace("'../../packages/ui/i18n.mjs'", JSON.stringify(new URL('../packages/ui/i18n.mjs', import.meta.url).href));
   module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
   const click = selector => { const element = document.querySelector(selector); assert.ok(element, selector); element.click(); };
@@ -107,7 +108,7 @@ test('console: login, connection discovery, model publication, scoped key and JS
   fill('token', app.admin); submit('#login-form');
   await until(() => document.querySelector('.shell'));
   assert.equal(document.querySelector('h1').textContent, '连接与凭证');
-  assert.deepEqual([...document.querySelectorAll('.nav button')].map(button => button.textContent), ['连接与凭证', '模型与服务', '接口文档', '调用测试', '项目访问']);
+  assert.deepEqual([...document.querySelectorAll('.nav button')].map(button => button.textContent), ['连接与凭证', '模型与服务', '接口文档', '调用测试', '项目访问', '用量']);
   assert.ok(document.querySelector('.page > section').classList.contains('connections-endpoint'));
   assert.equal(document.querySelector('.stats'), null);
   assert.deepEqual([...document.querySelectorAll('.provider-group h3')].map(heading => heading.textContent), ['模型 API', 'Ollama', 'Codex']);
@@ -230,6 +231,10 @@ test('console: login, connection discovery, model publication, scoped key and JS
   assert.deepEqual((await app.request('/v1/models', 'GET', undefined, key)).data.data.map(item => item.id), [model.id]);
   assert.ok(document.querySelector('#dialog').open, 'new token dialog survives the prior dialog close event');
   submit('#modal-form'); await modalDone();
+  click('[data-action="edit-key-limits"]');
+  fill('requestsPerMinute', '12'); submit('#modal-form'); await modalDone();
+  assert.equal(app.store.read().keys[0].limits.requestsPerMinute, 12);
+  assert.match(document.querySelector('.table-wrap').textContent, /12 次\/分钟/);
   const callsBeforeDocs = upstream.calls.length;
   click('.nav [data-view="api"]');
   assert.equal(document.querySelector('[data-api-id="chat"]').open, true);

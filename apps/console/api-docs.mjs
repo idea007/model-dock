@@ -159,6 +159,7 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
       [code('instructions'), t('docs.optionalString'), t('docs.responsesInstructions')],
       [code('stream'), t('docs.optionalBoolean'), t('docs.responsesStreamField')],
       [code('store'), t('docs.optionalBoolean'), t('docs.responsesStore')],
+      [code('max_output_tokens'), t('docs.optional'), t('docs.responsesOutputLimit')],
       [code('tools / tool_choice'), t('docs.optional'), t('docs.responsesTools')],
       [code('parallel_tool_calls'), t('docs.optionalBoolean'), t('docs.responsesParallel')]
     ])}
@@ -240,12 +241,17 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
         ['401', code('unauthorized / key_revoked'), t('docs.unauthorizedHelp')],
         ['403', code('model_forbidden'), t('docs.forbiddenHelp')],
         ['404', code('model_unavailable'), t('docs.modelUnavailableHelp')],
+        ['409', code('budget_price_required / budget_token_ceiling_required'), t('docs.budgetRequirements')],
         ['413', code('request_too_large / image_reference_too_large'), t('docs.tooLargeHelp')],
         ['415', code('unsupported_media_type'), code('Content-Type: application/json')],
         ['429', code('connection_busy'), t('docs.busyHelp')],
+        ['429', code('project_rate_limited / project_at_capacity / request_body_capacity'), t('docs.localLimitsHelp')],
+        ['429', code('project_budget_exceeded'), t('errors.projectBudgetExceeded')],
         ['429', code('upstream_rate_limited / codex_rate_limited'), t('docs.rateLimitedHelp')],
         ['502', code('upstream_auth_failed / upstream_protocol_error / upstream_json_invalid / codex_protocol_error'), t('docs.upstreamErrorHelp')],
         ['502', code('upstream_tool_choice_failed / codex_tool_required / codex_tool_invalid'), t('docs.toolErrorHelp')],
+        ['503', code('pool_unavailable'), t('errors.poolUnavailable')],
+        ['503', code('budget_ledger_unavailable'), t('errors.budgetLedgerUnavailable')],
         ['504', code('request_timeout'), t('docs.timeoutHelp')]
       ])}
       <p class="api-note">${t('docs.retryHelp')}</p>

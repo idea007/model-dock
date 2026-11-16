@@ -17,7 +17,11 @@ The local process is a single trusted operator service. Project keys scope infer
 
 ## Persistence
 
-`Store` owns the JSON schema, revision checks, encrypted upstream credentials, private-file permissions, a single-writer lock and atomic replacement. This is appropriate for a local tool, not a horizontally scaled database. Requests keep bounded metadata in memory; prompts and completions are never written by the gateway.
+`Store` owns the JSON schema, revision checks, encrypted upstream credentials, private-file permissions, a single-writer lock and atomic replacement. The gateway writes execution metadata to a separate local usage ledger with 30-day retention. Appending a record does not update the configuration revision. The request log only contains metadata and measured usage.
+
+`ProjectBudgets` uses the gateway's single-writer lock and a serialized local ledger. It persists an estimated cost reservation before provider submission. Settlement charges measured usage or carries the reservation as unconfirmed if the outcome is unknown. Outstanding reservations from a previous process are recovered as unconfirmed on startup.
+
+A deployment pool is a separately published model ID with explicitly configured members. The gateway applies project authorization to that ID, filters members by publication and request compatibility, and uses the lowest fraction of occupied connection slots. It rotates ties and tracks connection cooldowns in memory. Usage follows the actual deployment even when the request names a pool.
 
 Adapters receive only their connection's decrypted secret. The console sees `hasKey`, not the secret or encrypted envelope. Scoped project keys are stored as SHA-256 hashes and disclosed only once. The master key is separate from state, but resides in the same private OS account directory; this is disk-file protection rather than hardware-backed key storage.
 

@@ -217,6 +217,7 @@ test('Codex publishes an independent image model and enforces project access and
     assert.equal((await app.request(endpoint, 'POST', { ...request, ...extra }, imageKey)).status, 400);
   }
   assert.equal(app.gateway.history.length, 0);
+  assert.equal((await app.mutate('/admin/usage/prices', 'PATCH', { modelId: model, price: { currency: 'USD', perImage: 0.25 } })).status, 200);
   const image = await sdk.images.generate({ ...request, n: 1, response_format: 'b64_json' });
   assert.equal(image.output_format, 'png');
   assert.equal(image.data.length, 1);
@@ -232,6 +233,9 @@ test('Codex publishes an independent image model and enforces project access and
   assert.equal(invalid.data.error.code, 'codex_image_result_invalid');
   assert.doesNotMatch(JSON.stringify(invalid.data), /private\/secret/);
   assert.doesNotMatch(JSON.stringify(app.gateway.history), /b64_json|blue cup|private\/secret/);
+  const report = (await app.request('/admin/usage')).data;
+  assert.equal(report.total.images, 2);
+  assert.deepEqual(report.total.estimates, { USD: 0.5 });
 });
 
 test('Codex accepts ordered image references larger than the chat body limit and cleans up the files', async t => {

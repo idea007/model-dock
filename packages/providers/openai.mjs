@@ -22,9 +22,9 @@ export const openai = {
       };
     });
   },
-  async *generate(connection, request, { secret, signal, responses }) {
-    const body = responses ? { ...request, store: false } : request;
-    if (responses && request.stream && new URL(connection.baseUrl).origin === 'https://api.openai.com') {
+  async *generate(connection, request, { secret, signal, responses, budgeted }) {
+    const body = { ...request, ...(responses && { store: false }) };
+    if ((responses || budgeted) && request.stream && new URL(connection.baseUrl).origin === 'https://api.openai.com') {
       body.stream_options = { include_usage: true };
     }
     const response = await fetchUpstream(`${connection.baseUrl}/chat/completions`, {

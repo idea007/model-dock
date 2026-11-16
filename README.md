@@ -154,7 +154,7 @@ Built-in Codex authentication has a different scope from hosted services. For co
 - `POST /v1/images/generations`: one Base64-encoded image from Codex, with optional reference images.
 - Token usage as reported by the upstream. Missing usage stays unknown rather than being fabricated as zero.
 - Client disconnects and cancellation, request timeouts, concurrency limits, and project-key revocation.
-- Management APIs for connections, catalogs, model publication, project keys, and cancellation of in-flight requests.
+- Management APIs for connections, catalogs, model publication, deployment pools, project keys, and cancellation of in-flight requests.
 
 **Compatibility covers the documented subset.** Unsupported parameters return errors. For example, Codex rejects `temperature` and `max_tokens`. On a `429`, inspect `error.code` to distinguish gateway capacity from provider rate limits. See the [compatibility matrix](docs/compatibility.md), [errors and retries](docs/api.md#errors-and-retries) and [management API](docs/api.md#management).
 
@@ -164,11 +164,16 @@ Later work includes audio and video capabilities, remote device pairing, and Oll
 
 Data is stored in the current user's `~/.model-dock` by default. Set `MODEL_DOCK_HOME` to use a dedicated directory. Only one gateway process may write to a directory at a time.
 
-- `state.json`: connections, models, compatible legacy aliases, hashed project keys, and upstream keys encrypted with AES-256-GCM.
+- `state.json` stores connections, models, deployment pools, compatible legacy aliases, hashed project keys, and upstream keys encrypted with AES-256-GCM.
 - `master.key`: the decryption key. `admin.token`: the local administrator token.
 - POSIX file permissions are `0600`, and directory permissions are `0700`. On Windows, use a directory private to the current user and configure the corresponding ACLs.
 - Atomic writes and revision checks prevent concurrent overwrites. Reading a corrupted configuration does not reset it.
-- By default, only the latest 100 request metadata records are kept in memory. Prompts and responses are not stored, and the history clears on restart.
+- `usage/` holds 30 days of local request metadata. The **Usage** page filters by project and model, exports CSV and supports optional model prices for estimates. The ledger records no prompts, outputs or credentials.
+- `budgets.json` stores monthly budget balances and active reservations using local model prices.
+
+Set request limits and an optional monthly budget per key in **Project access**. The budget reserves estimated cost before each call and settles against reported usage. Enter a price in the same currency under **Usage**. [Budget and pricing rules](docs/api.md#project-limits-budgets-and-local-usage)
+
+In **Models & services**, publish a deployment pool to route requests across deployments of the same model. Grant the pool ID to a project key to use it. The gateway selects by current concurrency and skips connections in cooldown. [Deployment pool setup](docs/api.md#deployment-pools)
 
 Back up the entire data directory together. The encryption key and data reside on the same machine, so this does not protect against someone who already has access to the current OS account. Do not commit this directory to Git, sync it to untrusted accounts, or share it publicly.
 

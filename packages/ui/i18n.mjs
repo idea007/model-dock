@@ -93,7 +93,23 @@ const translatedErrorCodes = new Map([
   ['codex_bad_request', 'errors.codexBadRequest'],
   ['codex_image_unavailable', 'errors.imageUnavailable'],
   ['invalid_image_input', 'errors.invalidImageInput'],
-  ['reasoning_effort_disabled', 'errors.reasoningLevelDisabled']
+  ['reasoning_effort_disabled', 'errors.reasoningLevelDisabled'],
+  ['credential_origin_changed', 'errors.credentialOriginChanged'],
+  ['invalid_key_limits', 'errors.invalidKeyLimits'],
+  ['invalid_usage_currency', 'errors.invalidUsageCurrency'],
+  ['invalid_usage_price', 'errors.invalidUsagePrice'],
+  ['project_rate_limited', 'errors.projectRateLimited'],
+  ['project_at_capacity', 'errors.projectAtCapacity'],
+  ['invalid_model_pool', 'errors.invalidModelPool'],
+  ['incompatible_pool_members', 'errors.incompatiblePoolMembers'],
+  ['pool_unavailable', 'errors.poolUnavailable'],
+  ['invalid_project_budget', 'errors.invalidProjectBudget'],
+  ['project_budget_exceeded', 'errors.projectBudgetExceeded'],
+  ['budget_ledger_unavailable', 'errors.budgetLedgerUnavailable'],
+  ['budget_price_required', 'errors.budgetPriceRequired'],
+  ['budget_token_ceiling_required', 'errors.budgetTokenCeilingRequired'],
+  ['invalid_budget_token_ceiling', 'errors.invalidBudgetTokenCeiling'],
+  ['request_body_capacity', 'errors.requestBodyCapacity']
 ]);
 
 export class LocalizedError extends Error {

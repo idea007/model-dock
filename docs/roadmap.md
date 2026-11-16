@@ -7,7 +7,8 @@
 - Codex single-image generation with model publication and project-key access.
 - Credential management, model discovery/manual registration, publication and compatibility for existing aliases.
 - Independent client demo for standalone/grouped features, explicit model defaults and reasoning preferences.
-- Scoped project keys, cancellation, capacity limits and bounded metadata.
+- Scoped project keys, request limits, monthly budget reservations, cancellation, capacity limits and a local usage ledger with CSV export.
+- Published same-model deployment pools with least-loaded selection and temporary failure cooldown.
 - Offline fixtures, official SDK contract tests, packaging verification, local setup and integration examples.
 
 ## Next — optional outbound device connector
@@ -28,7 +29,7 @@ Required work before advertising support:
 - Ollama pull progress, cancellation, loaded-model status and explicit unload/delete actions.
 - Embeddings and additional image, audio and video adapters with job and artifact contracts.
 - Native provider protocols beyond OpenAI-compatible APIs.
-- OS credential-store integration, durable usage/export and richer per-function parameter policies.
+- OS credential-store integration and richer per-function parameter policies.
 - Optional embeddable UI/SDK packages after external consumers establish their requirements.
 
 Repository split becomes useful when the connector has multiple independent coordinator consumers, a stable public protocol, and different maintainers/release cadence. Multiple processes or installation packages alone do not require multiple repositories.

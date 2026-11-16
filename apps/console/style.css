@@ -145,6 +145,25 @@
   height: 14px;
 }
 
+.usage-heading { flex-wrap: wrap; margin-bottom: 20px; }
+.usage-heading button, .usage-price-controls button { white-space: nowrap; }
+.usage-filters, .usage-stats { display: grid; gap: 12px; }
+.usage-filters { grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); margin-bottom: 10px; }
+.usage-filters label { min-width: 0; }
+.usage-note { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+.usage-stats { grid-template-columns: repeat(auto-fit, minmax(min(100%, 156px), 1fr)); margin-bottom: 18px; }
+.usage-stats .card { padding: 16px; min-width: 0; }
+.usage-stats h2 { font-size: 13px; color: var(--muted); font-weight: 500; }
+.usage-stats strong { display: block; font-size: 22px; line-height: 1.4; margin: 4px 0; overflow-wrap: anywhere; }
+.usage-stats small, .usage-section td small { display: block; }
+.usage-section { margin: 22px 0; }
+.usage-section h2 { margin-bottom: 8px; }
+.usage-section p { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+.usage-section td { overflow-wrap: anywhere; }
+.usage-price-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.usage-price-controls select { width: min(100%, 360px); }
+.key-budget small { display: block; }
+
 @media(min-width:1600px){.page{padding-top:45px}}
 @media(max-width:1100px){.shell{grid-template-columns:190px minmax(0,1fr)}.sidebar{padding:25px 12px}.page{padding:28px}.topbar{padding:0 28px}.playground{grid-template-columns:1fr}.playground .card{min-height:0}}
 @media(max-width:760px){.shell{display:block}.sidebar{height:auto;position:static;padding:18px;gap:14px}.sidebar-sub,.sidebar-bottom,.nav-label{display:none}.brand{font-size:17px}.nav{display:flex;overflow-x:auto;gap:4px}.nav button{white-space:nowrap;padding:9px;font-size:11px}.nav button svg{width:15px;height:15px}.topbar{height:58px;padding:0 20px}.page{padding:26px 18px}.page-heading{align-items:flex-start;gap:12px}.page-heading h1{font-size:24px}.page-heading .primary{font-size:11px;white-space:nowrap}.toolbar{flex-wrap:wrap}.toolbar input{max-width:none}.endpoint{align-items:flex-start;flex-direction:column}.route-card{flex-wrap:wrap}.arrow{display:none}.route-card .row{flex-wrap:wrap}td,th{padding:12px}.card{padding:19px}#toast{left:50%;width:max-content;max-width:90vw}.form-grid{grid-template-columns:1fr}.crumb{font-size:11px}.pill{font-size:10px}.login-card{padding:25px}}

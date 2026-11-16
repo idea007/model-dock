@@ -10,6 +10,16 @@ export function equalSecret(value, expectedHash) {
 export const newToken = prefix => `${prefix}_${randomBytes(32).toString('base64url')}`;
 export const newId = prefix => `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
 
+export async function writePrivateJson(file, value) {
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    const handle = await fs.open(temporary, 'wx', 0o600);
+    try { await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`); await handle.sync(); }
+    finally { await handle.close(); }
+    await fs.rename(temporary, file);
+  } finally { await fs.unlink(temporary).catch(() => {}); }
+}
+
 export class Store {
   constructor(directory) { this.directory = directory; this.file = path.join(directory, 'state.json'); this.queue = Promise.resolve(); }
   async open() {
@@ -43,9 +53,11 @@ export class Store {
       catch (error) {
         if (error.code !== 'ENOENT') throw new Error('Cannot read state.json. Restore a valid backup.');
         this.state = { schemaVersion: SCHEMA_VERSION, revision: 0, connections: [], models: [], routes: [], keys: [] };
-        await this.#write(this.state);
+        await writePrivateJson(this.file, this.state);
       }
-      if (![1, SCHEMA_VERSION].includes(this.state.schemaVersion) || !Number.isSafeInteger(this.state.revision) || !['connections', 'models', 'routes', 'keys'].every(key => Array.isArray(this.state[key]))) throw new Error('Unsupported or damaged state schema.');
+      if (![1, SCHEMA_VERSION].includes(this.state.schemaVersion) || !Number.isSafeInteger(this.state.revision)
+        || !['connections', 'models', 'routes', 'keys'].every(key => Array.isArray(this.state[key]))
+        || this.state.pools !== undefined && !Array.isArray(this.state.pools)) throw new Error('Unsupported or damaged state schema.');
       // Fail closed if encrypted state and the key no longer match.
       for (const connection of this.state.connections) if (connection.secret) this.decrypt(connection.secret);
       if (this.state.schemaVersion === 1) {
@@ -54,7 +66,7 @@ export class Store {
         const backup = path.join(this.directory, `state.v1.${randomUUID()}.backup.json`);
         await fs.writeFile(backup, `${JSON.stringify(this.state, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
         const migrated = { ...this.state, schemaVersion: SCHEMA_VERSION, revision: this.state.revision + 1 };
-        await this.#write(migrated); this.state = migrated;
+        await writePrivateJson(this.file, migrated); this.state = migrated;
       }
       return this;
     } catch (error) { await this.close(); throw error; }
@@ -84,17 +96,9 @@ export class Store {
       if (!Number.isSafeInteger(revision) || revision !== this.state.revision) throw new GatewayError('Settings changed. Refresh and try again.', 409, 'revision_conflict');
       const next = this.read(); const value = operation(next);
       if (value?.then) throw new Error('State mutations must be synchronous.');
-      next.revision += 1; await this.#write(next); this.state = next; return value;
+      next.revision += 1; await writePrivateJson(this.file, next); this.state = next; return value;
     });
     this.queue = result.catch(() => {}); return result;
-  }
-  async #write(state) {
-    const temporary = `${this.file}.${randomUUID()}.tmp`;
-    try {
-      const file = await fs.open(temporary, 'wx', 0o600);
-      try { await file.writeFile(`${JSON.stringify(state, null, 2)}\n`); await file.sync(); } finally { await file.close(); }
-      await fs.rename(temporary, this.file);
-    } finally { await fs.unlink(temporary).catch(() => {}); }
   }
   async close() {
     await this.queue;

@@ -6,7 +6,8 @@ import { beginStream, json, write } from './http.mjs';
 
 const incompleteReasons = new Map([['length', 'max_output_tokens'], ['content_filter', 'content_filter']]);
 
-export async function createResponse(http, gateway, body, principal, { id, signal }) {
+export async function createResponse(http, gateway, body, principal, context) {
+  const { id, signal } = context;
   const request = responsesToChat(body);
   const streaming = body.stream === true;
   const state = completionState();
@@ -71,7 +72,7 @@ export async function createResponse(http, gateway, body, principal, { id, signa
   }
 
   try {
-    for await (const event of gateway.generate(request, principal, { id, signal, responses: true })) {
+    for await (const event of gateway.generate(request, principal, context)) {
       if (event.type === 'delta') mergeDelta(state, event.delta);
       if (streaming && !http.headersSent) {
         heartbeat = beginStream(http);
@@ -97,7 +98,8 @@ export async function createResponse(http, gateway, body, principal, { id, signa
       http.end();
     } else json(http, 200, response);
   } catch (error) {
-    gateway.recordResponseFailure(id, error);
+    if (body.max_output_tokens !== undefined && error?.param === 'max_completion_tokens') error.param = 'max_output_tokens';
+    gateway.recordResponseFailure(context, error);
     if (!http.headersSent) throw error;
     if (signal.aborted || http.destroyed) return;
     const failure = errorPayload(error).error;

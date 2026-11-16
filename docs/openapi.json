@@ -21,7 +21,7 @@
       "get": {
         "operationId": "listModels",
         "summary": "List authorized models",
-        "description": "Lists available, published models and legacy aliases authorized for the supplied key. Capability values can be unknown. The catalog is a metadata lookup.",
+        "description": "Lists published models, deployment pools and legacy aliases available to the supplied key. Capability values can be unknown. Pool entries expose shared metadata and use source.type pool.",
         "responses": {
           "200": {
             "description": "Authorized model catalog. An empty data array is valid.",
@@ -613,7 +613,7 @@
         }
       },
       "RetryAfter": {
-        "description": "For connection_busy, 2 seconds. For upstream_rate_limited, the valid upstream delay in seconds or IMF-fixdate when provided. Codex quota errors can omit this header.",
+        "description": "Local request limits and deployment pool cooldowns can return a delay in seconds. For upstream_rate_limited, the gateway forwards a valid upstream delay in seconds or IMF-fixdate. Budget and Codex quota errors can omit this header.",
         "schema": {
           "type": "string"
         },
@@ -682,7 +682,7 @@
         }
       },
       "Conflict": {
-        "description": "The connection was removed during inference or the chat reasoning policy needs to be updated.",
+        "description": "A connection or configuration change, an unavailable reasoning policy, or missing budget pricing or token ceilings.",
         "headers": {
           "x-request-id": {
             "$ref": "#/components/headers/RequestId"
@@ -727,7 +727,7 @@
         }
       },
       "RateLimited": {
-        "description": "Gateway capacity or provider quota. Use the code to identify the source.",
+        "description": "A project request limit, project_budget_exceeded, gateway capacity or provider quota. Use the code to identify the source.",
         "headers": {
           "x-request-id": {
             "$ref": "#/components/headers/RequestId"
@@ -825,10 +825,13 @@
         }
       },
       "ServiceUnavailable": {
-        "description": "Gateway shutting down or native Codex image generation currently unavailable.",
+        "description": "Gateway shutting down, native Codex image generation unavailable, pool_unavailable during cooldown, or budget_ledger_unavailable.",
         "headers": {
           "x-request-id": {
             "$ref": "#/components/headers/RequestId"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
           }
         },
         "content": {
@@ -948,7 +951,8 @@
                     "enum": [
                       "openai",
                       "ollama",
-                      "codex"
+                      "codex",
+                      "pool"
                     ]
                   }
                 }
@@ -1058,7 +1062,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 512,
-            "description": "Authorized full model ID or a legacy alias."
+            "description": "Authorized full model ID, deployment pool ID or legacy alias."
           },
           "messages": {
             "type": "array",
@@ -1781,7 +1785,7 @@
         "required": ["model", "input"],
         "additionalProperties": false,
         "properties": {
-          "model": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Authorized full model ID or a legacy alias." },
+          "model": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Authorized full model ID, deployment pool ID or legacy alias." },
           "input": {
             "description": "A user prompt or ordered, self-contained history. Resend images in their original user messages. Function results reference a preceding function call by call_id. Include all results before adding the next message.",
             "oneOf": [
@@ -1798,6 +1802,7 @@
           "instructions": { "type": ["string", "null"], "description": "Prepend these instructions to the text history for this request." },
           "stream": { "type": "boolean", "default": false },
           "store": { "const": false, "default": false, "description": "The client supplies history for each request." },
+          "max_output_tokens": { "type": "integer", "minimum": 1, "maximum": 1000000, "description": "Output token limit for compatible OpenAI-style APIs and Ollama. Codex rejects this parameter." },
           "tools": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/ResponsesFunctionTool" } },
           "tool_choice": { "$ref": "#/components/schemas/ResponsesToolChoice", "description": "Ollama supports auto and none. The other adapters also accept required and named functions, subject to the model." },
           "parallel_tool_calls": { "const": false, "default": false, "description": "At most one function can be handed off in a turn." }

@@ -8,7 +8,7 @@ Download the [OpenAPI 3.1 specification](openapi.json) from the repository or fr
 
 | Method and path | Operation |
 | --- | --- |
-| `GET /v1/models` | List published models and legacy aliases visible to the supplied key |
+| `GET /v1/models` | List published models, deployment pools and legacy aliases visible to the supplied key |
 | `POST /v1/chat/completions` | Accept text or images and return text or function calls as JSON or SSE |
 | `POST /v1/responses` | Accept text or images and return a stateless response with up to one function call as JSON or SSE |
 | `POST /v1/images/generations` | Generate or edit one Codex image using a JSON body |
@@ -23,7 +23,7 @@ See [authorized model metadata](#authorized-model-metadata) for capability field
 
 ### Chat Completions
 
-Send an exact model ID or an existing legacy alias and a `messages` array. Each message uses string `content` or a non-empty array of parts. Model Dock joins pure text arrays in order. A user message can mix `text` and `image_url` parts. Set `n: 1` or omit it. [Image input examples](#image-input)
+Send an exact model ID, deployment pool ID or legacy alias, plus a `messages` array. Each message uses string `content` or a non-empty array of parts. Model Dock joins pure text arrays in order. A user message can mix `text` and `image_url` parts. Set `n: 1` or omit it. [Image input examples](#image-input)
 
 An assistant message carrying `tool_calls` or an explicit refusal can use `content: null`. For a tool call, `content` may also be omitted. [Function call and replay example](#function-calling)
 
@@ -46,15 +46,16 @@ Use `POST /v1/responses` for text or image input with OpenAI-compatible APIs, Ol
 
 | Field | Accepted values |
 | --- | --- |
-| `model` | Full authorized model ID or a legacy alias |
+| `model` | Authorized model ID, deployment pool ID or legacy alias |
 | `input` | A non-empty user prompt or an ordered array of message and function items. Messages use `system`, `developer`, `user` or `assistant`. User messages can mix `input_text` and `input_image`. Replay assistant output with `output_text` or `refusal` parts |
 | `instructions` | Optional string prepended as a system message. Resend it on each request that needs it |
 | `stream` | Optional boolean. Set `true` for SSE |
 | `store` | Omit or set `false`. Keep conversation history in the calling app |
+| `max_output_tokens` | Optional integer from 1 to 1,000,000. Supported by compatible upstreams and Ollama. Codex rejects this field |
 | `tools`, `tool_choice` | Optional flat function definitions with `type: "function"`, `name` and object-schema `parameters`. Use `auto` or `none` on all adapters. OpenAI-compatible APIs and Codex also accept `required` and named functions such as `{ "type": "function", "name": "weather" }`. Omitted or null `strict` selects `false`. `strict: true` requires support from the OpenAI-compatible upstream |
 | `parallel_tool_calls` | Omit or set `false` |
 
-The JSON request limit is 2 MiB. The 2048-message limit includes `instructions` when supplied as a non-empty string. State and background fields such as `previous_response_id`, `conversation`, `store: true` and `background` return `400`. The first release accepts the fields above. Other parameters, such as `max_output_tokens` and structured output settings, return `400`. `GET /v1/responses/{id}` returns `404`.
+The JSON request limit is 2 MiB. The 2048-message limit includes `instructions` when supplied as a non-empty string. State and background fields such as `previous_response_id`, `conversation`, `store: true` and `background` return `400`. Structured output settings are available through Chat Completions. `GET /v1/responses/{id}` returns `404`.
 
 ```js
 import OpenAI from 'openai';
@@ -252,23 +253,28 @@ Record the gateway response header `x-request-id`. Include it, the HTTP status a
 | `403` | `model_forbidden`, `host_forbidden`, `origin_forbidden` | Check the project's permissions and gateway origin |
 | `404` | `model_unavailable`, `not_found` | Refresh the model list or check the request path |
 | `409` | `reasoning_policy_unavailable`, `connection_removed` | Refresh configuration or check whether the connection still exists |
+| `409` | `budget_price_required`, `budget_token_ceiling_required` | Set a matching deployment price and verify token ceilings. Supply a supported output limit if relevant |
 | `413` | `request_too_large`, `image_reference_too_large` | Reduce the body or decoded reference size |
 | `415` | `unsupported_media_type` | Send `Content-Type: application/json` |
 | `429` | `connection_busy` | Gateway capacity was exhausted before provider submission. `Retry-After: 2` gives a delay in seconds |
+| `429` | `project_rate_limited`, `project_at_capacity`, `request_body_capacity` | A project limit or the shared request body capacity was reached before provider submission. `Retry-After` gives a delay in seconds |
+| `429` | `project_budget_exceeded` | The remaining monthly budget cannot cover this reservation. Reduce an applicable output limit or review the project budget |
 | `429` | `upstream_rate_limited`, `codex_rate_limited` | The request reached the provider. A valid HTTP upstream `Retry-After` is forwarded as seconds or a standard GMT HTTP date. If the header is absent, choose a backoff based on the provider's quota and your retry policy |
 | `499` | `request_cancelled` | The active request was cancelled. A client that disconnected cannot read this response |
 | `502` | `upstream_auth_failed`, `upstream_unreachable`, `upstream_protocol_error`, `upstream_json_invalid`, `codex_protocol_error` | Check upstream credentials, availability and response behavior |
 | `502` | `upstream_tool_choice_failed`, `codex_tool_required`, `codex_tool_invalid` | Check that the model supports the requested choice and returned a valid call within the turn's limit |
 | `503` | `codex_image_unavailable`, `shutting_down` | Check the local Codex runtime or gateway process |
+| `503` | `pool_unavailable` | All compatible deployments are cooling down. `Retry-After` is the earliest cooldown expiry in seconds |
+| `503` | `budget_ledger_unavailable` | Check the local budget ledger file and directory permissions |
 | `504` | `request_timeout` | Check the configured connection deadline and provider state |
 
 The gateway submits the request once to the selected adapter. SDKs can retry on their own. For deliberate retries, use `maxRetries: 0` or `max_retries=0` and make the decision in the application. A disconnect or timeout can leave the execution outcome unknown. After a Codex cancellation, the slot stays occupied until the turn ends or the local App Server process stops.
 
 ## Authorized model metadata
 
-Each authorized native model includes `name`, `source: {id, name, type}`, nullable `capabilities` values (`text`, `tools`, `structured`, `thinking`, `image_input`), `context_window`, `reasoning_efforts` and `default_reasoning_effort`. A null capability means unknown. `codex-imagegen` also sets `capabilities.image_generation: true` and `capabilities.text: false`. Legacy aliases carry `legacy_alias: true` and the base model identity fields. Use connection-qualified model IDs for new integrations.
+Each authorized model includes `name`, `source: {id, name, type}`, nullable `capabilities` values (`text`, `tools`, `structured`, `thinking`, `image_input`), `context_window`, `reasoning_efforts` and `default_reasoning_effort`. A null capability means unknown. `codex-imagegen` also sets `capabilities.image_generation: true` and `capabilities.text: false`. Deployment pools use `source.type: "pool"` and advertise shared capabilities. Legacy aliases carry `legacy_alias: true` and the base model identity fields.
 
-The client app uses authorized native text models for application functions and uses the available image model IDs for its API examples. The gateway returns safe metadata scoped to the key.
+The client app uses authorized text models and pools for application functions and uses available image model IDs for its API examples. The gateway returns metadata scoped to the key.
 
 ## Management
 
@@ -285,13 +291,36 @@ Configuration writes use the latest integer `revision`, including the JSON body 
 | POST | `/admin/models` | `connectionId`, `nativeId`, `name?`. Manually registers a model on an API connection |
 | PATCH | `/admin/models/:encodedId` | `enabled`. URL-encode the entire model ID |
 | PATCH | `/admin/model-settings` | Complete `models` array of `{id, enabled, reasoningPolicy?}` |
+| POST | `/admin/pools` | `name`, `modelIds`, `enabled`. Returns the assigned pool ID |
+| PATCH | `/admin/pools/:id` | `name`, `modelIds`, `enabled` |
+| DELETE | `/admin/pools/:id` | `revision` only |
 | POST | `/admin/routes` | Legacy route returns `410 client_owned_settings`. Configure new functions in the client |
 | DELETE | `/admin/routes/:id` | `revision` only |
-| POST | `/admin/keys` | `name` and `models`, an array of permitted IDs or legacy aliases. Use `["*"]` for all published models, including future ones |
+| POST | `/admin/keys` | `name`, `models`, `limits?` and `budget?`. Use `["*"]` for all published models and pools, including future ones |
+| PATCH | `/admin/keys/:id` | `limits?`, `budget?`. Omitted settings keep their values |
 | DELETE | `/admin/keys/:id` | `revision` only. Cancels active calls using the revoked key |
+| PATCH | `/admin/usage/prices` | `modelId`, `price` |
 | POST | `/admin/requests/:id/cancel` | Empty JSON object `{}`. Use the active request ID from `/admin/state` |
 
-Key creation returns `token` once. On a connection edit, omitting `apiKey` retains the original and an empty string removes it. Discovery failures preserve the saved catalog and record a diagnostic code. A discovery racing a configuration write can return `409 revision_conflict`.
+Key creation returns `token` once. `models` lists permitted model or deployment pool IDs and legacy aliases. For connection edits within the same URL origin, omitting `apiKey` keeps the saved key. Changing the scheme, host or port on a connection with a saved key requires a replacement `apiKey` or an empty string to remove it. Discovery failures preserve the saved catalog and record a diagnostic code. A discovery racing a configuration write can return `409 revision_conflict`.
+
+### Deployment pools
+
+Create a pool under **Models & services** by selecting at least two deployments of the same native model on distinct upstream addresses using the same adapter. Grant access to the assigned pool ID and use that ID in inference requests. A pool-scoped key can reach members through the pool. Direct member IDs require their own grants. Requests using an explicit deployment ID or legacy alias keep their existing routing.
+
+The gateway filters by published status, capabilities, available connection slots and budget. Among eligible deployments it chooses the lowest fraction of occupied slots and rotates ties. A connection can enter cooldown after rate limits, authentication, network, timeout or upstream response failures. The gateway uses a valid upstream delay when available and defaults to 30 seconds. A submitted request stays with its chosen deployment. The usage log records the requested pool ID and the actual deployment.
+
+### Project limits, budgets and local usage
+
+`limits` accepts `{requestsPerMinute?, maxConcurrentRequests?}` with positive integer values. Omit a field or set it to `null` for unlimited use. A patch replaces both settings, and `limits: null` clears them. Existing keys without limits remain valid. A key shares one 60-second window and one concurrency limit across Chat Completions, Responses and Images. Admitted attempts count toward the time window even when subsequent validation or execution fails. Counters restart with the process. The gateway also reserves space for up to 32 JSON request bodies and 128 MiB in aggregate. A body without `Content-Length` reserves its endpoint maximum.
+
+`GET /admin/usage` reports admitted executions, with daily, project and model totals and up to 100 recent entries. Use `days` from 1 to 30 (default 7), `project` for a project key ID and `model` for the full model ID. Dates use the gateway’s local time. Add `format=csv` to export all matching entries. Entries keep the project and model names from the request, including after a key has been revoked. They contain request metadata and usage only. Records without measured tokens or a known image count contribute to the unknown usage count.
+
+For text models, `price` has `currency`, `inputPerMillion` and `outputPerMillion`, plus optional verified `maxInputTokens` and `maxOutputTokens` when catalog metadata omits them. For image models, it has `currency` and `perImage`. Use a three-letter uppercase currency code and non-negative prices. `price: null` clears the price. Estimates use the price at submission and apply when usage or output image count is known.
+
+`budget` accepts `{currency, amount}` with a positive amount of up to six decimal places. `budget: null` clears the setting. Accounting starts with budgeted requests and follows the gateway's local calendar month. Changing the amount retains charges already tracked for the same key and currency. The admin snapshot reports settled, reserved, unconfirmed and remaining amounts.
+
+The gateway reserves the cost before dispatch using a matching price and a verified token ceiling for each charged dimension or the price of one image. A supported output limit can lower the reservation. It rounds each charge up to a millionth of the currency unit. Complete usage settles the reservation, and unknown usage keeps it as an unconfirmed charge. A stopped request stays in the month when it was admitted. The allowance applies to the gateway's estimate. Its accuracy depends on configured prices, token ceilings and provider reporting. If reported usage exceeds the reservation, the gateway accounts for the full estimate and applies the reduced balance to future requests.
 
 ### Atomic model publication
 

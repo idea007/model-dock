@@ -16,7 +16,7 @@ const effortLabel = level => Object.hasOwn(labels, level) ? t(labels[level]) : l
 const chevron = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>';
 const pin = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 5 5-4 1-4 4 1 3-2 2-6-6 2-2 3 1 4-4z"/><path d="m8 16-5 5"/></svg>';
 const refresh = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/></svg>';
-const sourceLabels = { openai: 'common.modelApi', ollama: 'common.localOllama', codex: 'common.localCodex' };
+const sourceLabels = { openai: 'common.modelApi', ollama: 'common.localOllama', codex: 'common.localCodex', pool: 'pools.source' };
 const storageKey = 'model-dock-demo-draft-v1';
 const columns = { connections: [['provider', 'common.credentialService', 152, 120], ['model', 'common.model', 256, 180], ['effort', 'common.effortsHeading', 320, 180]], functions: [['feature', 'manager.feature', 200, 120], ['model', 'common.model', 416, 240]] };
 const config = state => ({ models: state.models.map(model => ({ id: model.id, enabled: model.enabled, reasoningPolicy: model.reasoningPolicy || null, groupPolicies: model.groupPolicies || {} })), routes: clone(state.routes) });
