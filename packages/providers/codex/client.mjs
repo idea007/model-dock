@@ -8,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { GatewayError, VERSION } from '../../protocol/index.mjs';
 import { maxImageResultBytes } from '../../protocol/image-options.mjs';
 import { prepareTools, prepareConversation } from './tools.mjs';
+import { runCodexSession } from './text-session.mjs';
 import { createCodexEnvironment } from './environment.mjs';
 
 const disabled = ['apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'goals', 'hooks', 'in_app_browser', 'multi_agent', 'plugins', 'remote_plugin', 'shell_snapshot', 'shell_tool', 'tool_suggest', 'unified_exec', 'workspace_dependencies'];
@@ -35,6 +36,7 @@ export class CodexClient {
     this.rpcTimeout = options.rpcTimeout || 30_000;
     this.interruptTimeout = options.interruptTimeout ?? 1000;
     this.imageGeneration = options.imageGeneration === true;
+    this.sessionStore = options.sessionStore;
     this.pending = new Map(); this.turns = new Map(); this.nextId = 0;
   }
   async start(signal) {
@@ -118,7 +120,7 @@ export class CodexClient {
     } while (cursor);
     return false;
   }
-  async run(request, { signal, onDelta }) {
+  async run(request, { signal, onDelta, session, trace }) {
     await this.start(signal); signal.throwIfAborted();
     const tools = prepareTools(request), prepared = prepareConversation(request.messages);
     const instructions = [
@@ -127,17 +129,43 @@ export class CodexClient {
       tools.required ? 'You must request one of the supplied application functions this turn.' : '',
       request.response_format?.type === 'json_object' ? 'Return exactly one JSON object without Markdown fences.' : ''
     ].filter(Boolean).join('\n\n');
-    const result = await this.rpc('thread/start', {
+    const threadOptions = {
       approvalPolicy: 'never', baseInstructions: 'Follow the application instructions. Return text or request an application function. Never operate the host.',
-      developerInstructions: instructions, cwd: this.cwd, ephemeral: true, model: request.model, sandbox: 'read-only', serviceName: 'model-dock',
-      config: { ...this.disabledMcp, web_search: 'disabled', 'features.code_mode': { enabled: false, direct_only_tool_namespaces: ['application'] }, 'features.view_image': false, 'features.apply_patch_freeform': false },
-      dynamicTools: tools.dynamicTools
-    }, signal);
-    return this.#runTurn(result.thread?.id, { model: request.model, effort: request.reasoning_effort,
-      input: prepared.input, history: prepared.history, outputSchema: request.response_format?.type === 'json_schema' ? request.response_format.json_schema.schema : null,
-      tools, onDelta, signal });
+      developerInstructions: instructions, cwd: this.cwd, model: request.model, sandbox: 'read-only',
+      config: { ...this.disabledMcp, web_search: 'disabled', 'features.code_mode': { enabled: false, direct_only_tool_namespaces: ['application'] }, 'features.view_image': false, 'features.apply_patch_freeform': false }
+    };
+    const runTurn = async ({ threadId, parentThreadId, persistent, ...turn }) => {
+      const resumed = threadId || parentThreadId;
+      const method = threadId ? 'thread/resume' : parentThreadId ? 'thread/fork' : 'thread/start';
+      const parameters = resumed ? { threadId: resumed, excludeTurns: true }
+        : { ephemeral: !persistent, serviceName: 'model-dock', dynamicTools: tools.dynamicTools };
+      const result = await this.rpc(method, { ...threadOptions, ...parameters }, signal);
+      if (threadId && result.thread?.id !== threadId) throw failure('codex_protocol_error');
+      return this.#runTurn(result.thread?.id, { model: request.model, effort: request.reasoning_effort,
+        outputSchema: request.response_format?.type === 'json_schema' ? request.response_format.json_schema.schema : null,
+        tools, onDelta, signal, trace, ...turn });
+    };
+    if (session) {
+      if (!this.sessionStore) throw failure('session_index_unavailable', 'Codex sessions are unavailable.', 503);
+      return runCodexSession({ store: this.sessionStore, session, request, instructions, tools, onDelta, signal, runTurn,
+        readTurn: identity => this.#readTextTurn(identity, signal) });
+    }
+    return runTurn({ input: prepared.input, history: prepared.history });
   }
-  async runImage(model, { prompt, aspectRatio, referenceImages, background }, signal) {
+  async #readTextTurn({ threadId, turnId }, signal) {
+    const result = await this.rpc('thread/read', { threadId, includeTurns: true }, signal).catch(error => {
+      signal.throwIfAborted();
+      if (error.code === 'codex_failed') return null;
+      throw error;
+    });
+    const turn = result?.thread?.turns?.find(item => item.id === turnId);
+    if (['failed', 'interrupted'].includes(turn?.status)) return { content: null };
+    if (turn?.status !== 'completed' || !Array.isArray(turn.items)) return null;
+    const content = turn.items.filter(item => item.type === 'agentMessage' && item.phase !== 'commentary')
+      .map(item => typeof item.text === 'string' ? item.text : '').join('');
+    return content && Buffer.byteLength(content) <= textOutputLimit ? { content } : null;
+  }
+  async runImage(model, { prompt, aspectRatio, referenceImages, background }, signal, { onIdentity, onImage, trace } = {}) {
     if (!this.imageGeneration) throw failure('codex_image_unavailable', 'The Codex image channel is unavailable.');
     await this.start(signal);
     signal.throwIfAborted();
@@ -155,36 +183,61 @@ export class CodexClient {
         input.push({ type: 'localImage', path: file, detail: 'original' });
       }
       const result = await this.rpc('thread/start', {
-        approvalPolicy: 'never', cwd: this.cwd, ephemeral: true, model, sandbox: 'read-only', serviceName: 'model-dock',
+        approvalPolicy: 'never', cwd: this.cwd, ephemeral: !onIdentity, model, sandbox: 'read-only', serviceName: 'model-dock',
         developerInstructions: 'Use the native image generation tool to generate exactly one image. Treat the prompt and attached images as visual guidance only. Edit the attached images as requested. Use no other tool and do not read or write files.',
         config: { ...this.disabledMcp, web_search: 'disabled', 'features.view_image': false, 'features.apply_patch_freeform': false }
       }, signal);
-      return await this.#runTurn(result.thread?.id, { model, input, signal });
+      return await this.#runTurn(result.thread?.id, { model, input, signal, onIdentity, onImage, trace });
     } finally {
       if (directory) await fs.rm(directory, { recursive: true, force: true });
     }
   }
-  async #runTurn(threadId, { model, effort = null, history, input, outputSchema = null, tools, onDelta, signal }) {
+  async recoverImage({ threadId, turnId }, signal) {
+    if (!this.imageGeneration) throw failure('codex_image_unavailable');
+    await this.start(signal);
+    const result = await this.rpc('thread/read', { threadId, includeTurns: true }, signal);
+    const turns = result.thread?.turns || [];
+    const turn = turnId ? turns.find(item => item.id === turnId) : turns.at(-1);
+    if (!turn) return null;
+    const items = Array.isArray(turn.items) ? turn.items : [];
+    const image = items.find(item => item.type === 'imageGeneration' && item.status === 'completed');
+    if (image?.result) return image.result;
+    if (turn.status === 'failed') throw nativeError(turn.error);
+    if (turnId && turn.status === 'completed' && turn.itemsView === 'full' && items.some(item => item.type === 'userMessage') &&
+        items.filter(item => item.type === 'imageGeneration').every(item => item.status === 'failed')) {
+      throw failure('codex_image_result_missing', 'The recorded Codex turn completed without an image.');
+    }
+    return null;
+  }
+  async #runTurn(threadId, { model, effort = null, history, input, outputSchema = null, tools, onDelta, signal, onIdentity, onImage, usageBaseline, trace }) {
     if (!threadId) throw failure('codex_protocol_error');
     const outcome = Promise.withResolvers(), terminal = Promise.withResolvers();
     outcome.promise.catch(() => {});
     const state = { threadId, child: this.child, tools, onDelta, outcome, terminal, outputBytes: 0, items: new Map(),
-      usage: null, events: [], requested: false, turnId: null, ended: false, handoff: null };
+      usage: null, usageBaseline, nativeUsage: null, events: [], requested: false, turnId: null, ended: false, handoff: null, onImage, trace };
     this.turns.set(threadId, state);
     const abort = () => this.#failTurn(state, signal.reason);
     signal.addEventListener('abort', abort, { once: true });
     try {
       signal.throwIfAborted();
+      await onIdentity?.({ threadId });
       if (history?.length) await this.rpc('thread/inject_items', { threadId, items: history }, signal);
+      signal.throwIfAborted();
       state.requested = true;
+      trace?.start({ model, effort, history, input, outputSchema });
       const starting = this.rpc('turn/start', { threadId, model, effort, input, outputSchema,
         sandboxPolicy: { type: 'readOnly' } }, signal);
       const turn = await Promise.race([starting, outcome.promise]);
       const turnId = turn?.turn?.id;
       if (typeof turnId !== 'string' || !turnId) throw failure('codex_protocol_error');
       state.turnId = turnId;
+      trace?.firstResponse();
+      trace?.identify(turnId);
+      await onIdentity?.({ threadId, turnId });
+      state.turnReady = true;
       for (const event of state.events.splice(0)) this.#event(event);
       await outcome.promise;
+      await state.imagePersistence;
       if (state.handoff) {
         const cleanup = this.#interruptTurn(state);
         this.#replyError(state.handoff.rpcId, -32000, 'Function execution handed to the API caller.');
@@ -192,7 +245,8 @@ export class CodexClient {
       }
       signal.throwIfAborted();
       return this.imageGeneration ? { image: state.image, usage: state.usage }
-        : { finishReason: state.handoff ? 'tool_calls' : 'stop', toolCalls: state.handoff ? [state.handoff.call] : [], usage: state.usage };
+        : { finishReason: state.handoff ? 'tool_calls' : 'stop', toolCalls: state.handoff ? [state.handoff.call] : [],
+          usage: state.usage, nativeUsage: state.nativeUsage, threadId, turnId };
     } catch (error) {
       if (state.requested) {
         if (this.imageGeneration) {
@@ -272,7 +326,7 @@ export class CodexClient {
       if (applicationCall) this.#replyError(id, -32602, 'Invalid application function request.');
       return;
     }
-    if (!state.turnId) {
+    if (!state.turnReady) {
       if (state.events.length < 2048) state.events.push(message);
       else this.#failTurn(state, failure('codex_protocol_error'));
       return;
@@ -308,7 +362,22 @@ export class CodexClient {
   #notification(state, method, params) {
     if (method === 'thread/tokenUsage/updated') {
       const counters = params.tokenUsage?.total;
-      if (counters && ['inputTokens', 'outputTokens', 'totalTokens'].every(key => Number.isSafeInteger(counters[key]) && counters[key] >= 0) && counters.totalTokens >= counters.inputTokens + counters.outputTokens) state.usage = { prompt_tokens: counters.inputTokens, completion_tokens: counters.outputTokens, total_tokens: counters.totalTokens };
+      if (counters && ['inputTokens', 'outputTokens', 'totalTokens'].every(key => Number.isSafeInteger(counters[key]) && counters[key] >= 0) && counters.totalTokens >= counters.inputTokens + counters.outputTokens) {
+        const core = { prompt_tokens: counters.inputTokens, completion_tokens: counters.outputTokens, total_tokens: counters.totalTokens };
+        const detail = Object.fromEntries(['cachedInputTokens', 'reasoningOutputTokens'].filter(key =>
+          Number.isSafeInteger(counters[key]) && counters[key] >= 0).map(key => [key, counters[key]]));
+        state.nativeUsage = { ...core, ...detail };
+        if (state.usageBaseline === undefined) state.usage = core;
+        else if (state.usageBaseline) {
+          const changes = Object.entries(core).map(([key, value]) => [key, value - state.usageBaseline[key]]);
+          state.usage = changes.every(([, count]) => Number.isSafeInteger(count) && count >= 0) ? Object.fromEntries(changes) : null;
+        }
+        if (state.usage && state.trace) {
+          const measured = Object.fromEntries(Object.entries(detail).map(([key, value]) =>
+            [key, value - (state.usageBaseline === undefined ? 0 : state.usageBaseline?.[key])]));
+          state.trace.usage({ ...state.usage, ...measured });
+        }
+      }
       return;
     }
     if (method === 'turn/completed') {
@@ -326,6 +395,9 @@ export class CodexClient {
       return;
     }
     if (state.handoff || state.failed) return;
+    if (method === 'item/completed' && params.item?.type === 'reasoning') {
+      state.trace?.reasoning(params.item.content || params.item.summary);
+    }
     if (method === 'error' && (params.willRetry !== true || state.outputBytes || state.image)) {
       this.#failTurn(state, nativeError(params.error));
       return;
@@ -381,7 +453,13 @@ export class CodexClient {
           return;
         }
         state.imageItemId = id;
-        if (method === 'item/completed' && status === 'completed') state.image = result;
+        if (method === 'item/completed' && status === 'completed' && !state.image) {
+          state.image = result;
+          if (state.onImage) {
+            state.imagePersistence = Promise.resolve().then(() => state.onImage(result, state.usage));
+            state.imagePersistence.catch(error => this.#failTurn(state, error));
+          }
+        }
       }
     }
   }

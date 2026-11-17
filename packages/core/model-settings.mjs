@@ -14,6 +14,17 @@ export function validateReasoningPolicy(policy, available, label = 'reasoning po
   return { allowedEfforts: [...levels], defaultEffort: policy.defaultEffort };
 }
 
+function validateModelReasoningPolicy(policy, declared) {
+  if (policy == null) return null;
+  exact(policy, ['allowedEfforts', 'defaultEffort', 'openEfforts']);
+  const { openEfforts, allowedEfforts, defaultEffort } = policy;
+  const opened = openEfforts === undefined ? declared
+    : validateReasoningPolicy({ allowedEfforts: openEfforts, defaultEffort }, declared, 'open reasoning levels').allowedEfforts;
+  const selected = validateReasoningPolicy({ allowedEfforts, defaultEffort }, opened);
+  return openEfforts !== undefined && opened.length > selected.allowedEfforts.length
+    ? { ...selected, openEfforts: opened } : selected;
+}
+
 export function modelReasoning(model) {
   const levels = supportedEfforts(model);
   return model.reasoningPolicy || (levels.length ? { allowedEfforts: levels, defaultEffort: levels.includes(model.defaultEffort) ? model.defaultEffort : levels[0] } : null);
@@ -37,9 +48,9 @@ export function saveModelSettings(state, input) {
     if (!Object.hasOwn(row, 'reasoningPolicy')) continue;
 
     const declared = supportedEfforts(model);
-    const policy = validateReasoningPolicy(row.reasoningPolicy, declared);
-    const previous = model.reasoningPolicy?.allowedEfforts || declared;
-    const next = policy?.allowedEfforts || declared;
+    const policy = validateModelReasoningPolicy(row.reasoningPolicy, declared);
+    const previous = model.reasoningPolicy?.openEfforts ?? model.reasoningPolicy?.allowedEfforts ?? declared;
+    const next = policy?.openEfforts ?? policy?.allowedEfforts ?? declared;
     const removed = declared.filter(level => previous.includes(level) && !next.includes(level));
     if (removed.length) {
       const aliases = state.routes.filter(route => route.modelId === model.id).map(route => route.reasoningPolicy);
@@ -61,9 +72,10 @@ export function applyReasoningPolicy(model, route, request) {
   if (!policy) return request;
   try {
     const levels = supportedEfforts(model);
-    if (base) validateReasoningPolicy(base, levels);
-    if (group) validateReasoningPolicy(group, base?.allowedEfforts || levels);
-    validateReasoningPolicy(policy, group?.allowedEfforts || base?.allowedEfforts || levels);
+    const opened = base?.openEfforts ?? base?.allowedEfforts ?? levels;
+    if (base) validateModelReasoningPolicy(base, levels);
+    if (group) validateReasoningPolicy(group, opened);
+    if (policy !== base) validateReasoningPolicy(policy, group?.allowedEfforts ?? opened);
   } catch {
     throw new GatewayError('The saved reasoning settings no longer match the model catalog. Review and save model settings.', 409, 'reasoning_policy_unavailable');
   }

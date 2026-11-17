@@ -11,7 +11,97 @@ Download the [OpenAPI 3.1 specification](openapi.json) from the repository or fr
 | `GET /v1/models` | List published models, deployment pools and legacy aliases visible to the supplied key |
 | `POST /v1/chat/completions` | Accept text or images and return text or function calls as JSON or SSE |
 | `POST /v1/responses` | Accept text or images and return a stateless response with up to one function call as JSON or SSE |
-| `POST /v1/images/generations` | Generate or edit one Codex image using a JSON body |
+| `POST /v1/images/generations` | Generate or edit one Codex or MFLUX image using a JSON body |
+| `POST /v1/audio/speech` | Convert text to audio and return the audio bytes |
+| `POST /v1/audio/transcriptions` | Upload and transcribe an audio file |
+| `POST /v1/embeddings` | Convert text to vectors |
+| `POST /v1/videos` | Submit an asynchronous video generation job |
+| `GET /v1/videos/{id}` | Retrieve the status of a video job |
+| `GET /v1/videos/{id}/content` | Download the completed video |
+
+## Provider services
+
+Under **Model API** in **Connections & credentials**, select **Add provider credential** to save the provider address and key. In **Models & services**, select **Add service**, choose the saved credential, and select a protocol such as OpenAI-compatible API or MiniMax images. The service uses the saved key and can specify its own Base URL path on that origin. Refresh the catalog, publish the service, and grant access to the relevant project keys. The project catalog lists the deployment under `id` and its protocol under `service`.
+
+For a loopback service such as local speech synthesis, select **Add local connection** under **Local services**. Enter the service address and its access token if required. When adding MFLUX, save its required service token, use its loopback HTTP address with an explicit port and the `/v1` path, and select **MFLUX image generation** as the protocol.
+
+The standard speech, transcription, embeddings and video routes use the full Model Dock ID from `GET /v1/models` in `model`. Set **Upstream model ID for standard endpoints** when editing a service. In the admin API this field is `upstreamModel`. Speech, transcription, embeddings and local LTX can discover the ID when the upstream `/models` returns exactly one model. Seedance requires its upstream model or endpoint ID, and Wan requires its upstream model ID. The default IDs for native MiniMax speech and video are `speech-2.8-hd` and `MiniMax-H3`. Edge TTS uses its built-in runtime model.
+
+For native request shapes on Chat Completions, Images, Audio Speech, Audio Transcriptions and Embeddings, use `X-Model-Dock-Service: <deployment-id>` and keep the upstream model name in the body. Requests with this header forward the service payload, including SSE, multipart files and binary results. This passthrough accepts transcription requests up to 129 MiB including multipart framing.
+
+Provider-specific operations use `/v1/services/<encoded-deployment-id>/<provider-path>`. Percent-encode the slash in the deployment ID. Supported paths include DeepSeek search, cloud video submission, status and cancellation, local LTX receipts and result retrieval, and voice enrollment or timestamped speech. The gateway uses an allowlist per protocol and scopes task and file IDs to the project that created them. LTX submissions and reconciliation use the caller's original idempotency key. Plan cutovers after any active tasks created outside the gateway have finished.
+
+## Audio and embeddings
+
+| Endpoint | Service profiles | Request and result |
+| --- | --- | --- |
+| `/v1/audio/speech` | `speech`, `minimax-speech`, `edge-tts` | JSON with `model`, `input` and an upstream `voice` ID. `response_format` and `speed` are optional. Save the returned audio bytes. |
+| `/v1/audio/transcriptions` | `transcription` | Multipart form with `model` and `file`. The file limit is 25 MiB and the complete multipart limit is 26 MiB. The upstream determines the available formats, timestamps, language hints and streaming options. |
+| `/v1/embeddings` | `embedding` | JSON with `model` and `input`. Use text or a non-empty array. Read the vectors in `data[].embedding`. The upstream determines optional `dimensions` and `encoding_format` support. |
+
+### Text to speech
+
+Use a voice exposed by the selected service. The MiniMax example uses `male-qn-qingse`. On Edge TTS choose `zh-CN-XiaoxiaoNeural` or `zh-CN-YunxiNeural`. MiniMax accepts MP3, WAV, FLAC and PCM in standard mode. Edge TTS uses MP3 and accepts up to 2,000 characters. Both use speed values from 0.5 to 2, and compatible `speech` services determine their own available formats and options. [Speech request format](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create)
+
+```bash
+curl --fail http://127.0.0.1:4317/v1/audio/speech \
+  -H "Authorization: Bearer $MODEL_DOCK_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"conn_0123456789abcdef/minimax-speech","input":"你好，欢迎使用 Model Dock。","voice":"male-qn-qingse","response_format":"mp3"}' \
+  --output speech.mp3
+```
+
+### Audio transcription
+
+```bash
+curl http://127.0.0.1:4317/v1/audio/transcriptions \
+  -H "Authorization: Bearer $MODEL_DOCK_API_KEY" \
+  --form-string 'model=conn_0123456789abcdef/transcription' \
+  --form-string 'response_format=json' \
+  -F 'file=@audio.wav'
+```
+
+### Embeddings
+
+```bash
+curl http://127.0.0.1:4317/v1/embeddings \
+  -H "Authorization: Bearer $MODEL_DOCK_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"conn_0123456789abcdef/embedding","input":["Model Dock standard API"],"encoding_format":"float"}'
+```
+
+## Video generation
+
+Submit jobs on local LTX, Seedance, MiniMax H3 or Wan. The [video request format](https://developers.openai.com/api/reference/resources/videos/methods/create) is supported for a prompt and one optional first-frame reference. Use `multipart/form-data` for an uploaded PNG, JPEG or WebP in `input_reference`, or use JSON with `input_reference.image_url` set to a Base64 image data URL. The full request may be up to 16 MiB. Use the complete authorized deployment ID in `model`.
+
+| Field | Accepted values |
+| --- | --- |
+| `prompt` | Non-empty string of up to 4,000 characters. The provider may have a smaller limit. |
+| `seconds` | Optional integer or numeric string. Defaults to 4. LTX supports 4 seconds. Cloud models apply their own duration limits. |
+| `size` | Optional `WIDTHxHEIGHT`. LTX accepts `512x320`, `768x448`, `320x512` and `448x768`. Cloud sizes `1280x720`, `720x1280`, `1920x1080`, `1080x1920`, `1792x1024` and `1024x1792` select the corresponding output tier and orientation. First-frame services can derive orientation from the reference. |
+| `input_reference` | Optional first-frame image. Supply one for an image-to-video-only deployment such as Wan I2V. |
+
+Submit a text-to-video job. The response includes the gateway `id` and a `Location` header for polling.
+
+```bash
+curl http://127.0.0.1:4317/v1/videos \
+  -H "Authorization: Bearer $MODEL_DOCK_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"conn_0123456789abcdef/local-ltx","prompt":"A small sailboat crosses a calm lake.","seconds":"4"}'
+```
+
+Use the `id` from submission as `VIDEO_ID`. Poll with the same project key. Status progresses through `queued` or `in_progress` to `completed` or `failed`. A failed job includes an `error` object. The status response includes the requested duration and size. The gateway stores the job ID and request metadata locally so status checks can survive a gateway restart.
+
+```bash
+curl "http://127.0.0.1:4317/v1/videos/$VIDEO_ID" \
+  -H "Authorization: Bearer $MODEL_DOCK_API_KEY"
+
+curl --fail --location "http://127.0.0.1:4317/v1/videos/$VIDEO_ID/content" \
+  -H "Authorization: Bearer $MODEL_DOCK_API_KEY" \
+  --output video.mp4
+```
+
+Download after `completed`. Local LTX returns `video/mp4`. Cloud services return `303` with the provider's signed asset URL by default. Send `Accept: video/mp4` to receive the MP4 through the gateway, as the console playground does for playback and download. Use `Idempotency-Key` on LTX when retrying an identical submission. Cloud submissions use provider-native retry semantics. For SDK integrations use `client.videos.create()`, `client.videos.retrieve()` and `client.videos.downloadContent()`.
 
 ## Inference
 
@@ -166,7 +256,7 @@ if (turn.status === 'completed') {
 
 Choose a published model authorized for your project that can read images. The model catalog uses `capabilities.image_input` for this capability. A value of `false` rejects image requests. A value of `null` leaves support up to the upstream.
 
-Both endpoints accept PNG, JPEG and WebP as Base64 data URLs in user messages. Omit `detail` or pass `"auto"`. HTTP URLs, local paths and `file_id` return `400`. The entire JSON request, including encoded images, instructions and history, must fit within 2 MiB. Base64 uses roughly four bytes for every three image bytes.
+Both endpoints accept PNG, JPEG and WebP as Base64 data URLs in user messages. Omit `detail` or pass `"auto"`. HTTP URLs, local paths and `file_id` return `400`. The JSON limit is 2 MiB for general inference requests. Chat Completions accepts up to 40 MiB when the project key authorizes direct Codex chat deployments and optionally direct image deployments. Base64 uses roughly four bytes for every three image bytes.
 
 Use the same SDK setup as above, with `model` set to a vision-capable model ID. The example reads a local PNG and sends a Chat Completions request, then shows how to replay an image with Responses.
 
@@ -201,7 +291,7 @@ Both endpoints return text with the same JSON or SSE format used for text-only r
 
 ### Images
 
-`POST /v1/images/generations` uses a published, authorized `connection-id/codex-imagegen` model. Use a project key to list models and select an entry whose `capabilities.image_generation` is `true`. Basic generation works with the OpenAI SDK's `images.generate({ model, prompt })`. Use the Model Dock `reference_images` extension on the same JSON endpoint for reference-based editing. The SDK's `images.edit()` calls `/v1/images/edits`, which returns `404` on Model Dock. See the [OpenAI image edit reference](https://developers.openai.com/api/reference/resources/images/methods/edit).
+`POST /v1/images/generations` uses a published, authorized image model. Use a project key to list models and select an entry whose `capabilities.image_generation` is `true`. Basic generation works with the OpenAI SDK's `images.generate({ model, prompt })`. Use the Model Dock `reference_images` extension on the same JSON endpoint for reference-based editing. The SDK's `images.edit()` calls `/v1/images/edits`, which returns `404` on Model Dock. See the [OpenAI image edit reference](https://developers.openai.com/api/reference/resources/images/methods/edit).
 
 ```json
 {"model":"connection-id/codex-imagegen","prompt":"A blue ceramic cup on a light background"}
@@ -209,10 +299,11 @@ Both endpoints return text with the same JSON or SSE format used for text-only r
 
 | Field | Accepted values |
 | --- | --- |
-| `model` | Required. Full ID of the Codex image model |
+| `model` | Required. Full ID of the published image model |
 | `prompt` | Required. Non-empty text up to 4,000 UTF-16 code units |
 | `reference_images` | Optional. Up to 5 ordered PNG, JPEG or WebP Base64 data URLs. The MIME type must match the decoded image. At most 30 MiB per decoded image and 50 MiB in total |
 | `aspect_ratio` | Optional. `16:9`, `9:16`, `1:1`, or `4:5`. Omit it to let Codex choose the canvas |
+| `size` | Optional for MFLUX. Exact size in `WIDTHxHEIGHT` form from `image_sizes`. Supply only one of `size` and `aspect_ratio` |
 | `background` | Optional. `auto` or `transparent`. Transparency is a generation request |
 | `n`, `response_format` | Optional. If supplied, use `1` and `b64_json` |
 
@@ -239,6 +330,32 @@ The response contains one image. Decode `data[0].b64_json` to get the file, up t
 
 Text and image calls share the single Codex request slot. The same connection timeout, cancellation and key revocation rules apply. To limit the application to one submission, set `maxRetries: 0` in the JavaScript SDK or `max_retries=0` in Python. After losing the response, the result of the first submission may be unknown.
 
+#### MFLUX
+
+Start the local MFLUX runtime, then add an MFLUX connection with its loopback URL (default `http://127.0.0.1:8016/v1`) and service token. Discover and publish its models, then grant each project's key the desired deployment IDs. The gateway lists ready, published MFLUX deployments with `model_revision`, `image_sizes` and `max_reference_images`. Each project uses the same gateway endpoints and its own key.
+
+The current runtime publishes `flux2-klein-4b` with up to four reference images and `z-image-turbo` for text prompts. MFLUX accepts `1:1`, `16:9` and `4:5`, defaulting to `1024x1024`. It returns a synchronous PNG of at most 16 MiB. The encoded request is at most 15 MiB, with up to 10 MiB per decoded reference. The runtime serializes inference and accepts up to four in-flight requests, including the running request.
+
+For multiple local projects, set `MODEL_DOCK_CODEX_QUEUE_WAIT_MS` when starting Model Dock to wait for the shared Codex slot. It defaults to `0` and accepts up to `120000` milliseconds. With waiting enabled, the gateway admits up to eight waiting Codex requests in arrival order. Queue time does not start the provider's execution timeout. A full queue or an expired wait returns `429 connection_busy` before submission. Disconnects and key revocation remove waiting requests. The authenticated admin state reports the current count as `codexWaiting`.
+
+### Codex session and operation extensions
+
+On Chat Completions, a directly published Codex deployment accepts `model_dock_session: { "id": "<64 lowercase hex characters>" }`. The caller keeps the authoritative history and resends its messages. Model Dock scopes the identifier by project key and deployment, resumes a compatible prefix, and replays completed requests from native history. A branch may supply another scoped ID as `parent_id`. A branch that sends complete task snapshots may set `mode: "snapshot"`. Application tool handoffs rebuild from the history and tool results sent by the caller. A pending native turn must be reconciled before any further paid turn is submitted on that session. The private index stores only digests and native execution identifiers.
+
+Chat Completions and Responses set `Location: /v1/requests/:id`. Use the owning key to inspect a running request or recent outcome. Treat a missing receipt as inconclusive because the in-memory history expires and is cleared at restart.
+
+A Codex image deployment that advertises `image_operations: true` in the project catalog accepts an optional `operation_id` of 64 lowercase hexadecimal characters on `POST /v1/images/generations`. With that field present, the response is `202` and its `Location` identifies the durable operation. Requests with the same operation and input return the existing receipt. Changed input returns `409`.
+
+| Action | Endpoint |
+| --- | --- |
+| Inspect the original operation | `GET /v1/images/operations/:id` |
+| Retrieve the completed Base64 result | `GET /v1/images/operations/:id/result` |
+| Request cancellation | `POST /v1/images/operations/:id/cancel` with an empty JSON object |
+
+The gateway releases the HTTP request after claiming the operation. Execution and recovery use the original native turn. The project remains the durable owner of receipts and results. A timeout or disconnect can leave an operation in `outcome_unknown`. Inspect the same ID to recover its result.
+
+To configure asynchronous images, publish the image deployment and authorize it for the project key. Administration can update its model list with `PATCH /admin/keys/:id` and the current revision. Add the project's image store to `codex-image-stores.json` under `MODEL_DOCK_HOME`, indexed by its `key_…` ID. Each entry contains an `origin` for that project's numeric IPv4 loopback HTTP service and a separate `token` for the authenticated `POST /integrations/codex-image-store` endpoint. The file uses mode `0600` and is loaded on startup. Each origin belongs to one project. The callback supports `read`, `claim`, `recordIdentity`, `markUnknown`, `markFailed`, `save`, and `result`. A caller cannot supply a callback address or native thread ID.
+
 <a id="error-handling"></a>
 
 ## Errors and retries
@@ -251,11 +368,12 @@ Record the gateway response header `x-request-id`. Include it, the HTTP status a
 | `400` | `context_length_exceeded`, `codex_bad_request` | For a context limit, shorten the input or send less history. For a Codex bad request, check the selected model and parameters |
 | `401` | `unauthorized`, `key_revoked` | Check or replace the project key |
 | `403` | `model_forbidden`, `host_forbidden`, `origin_forbidden` | Check the project's permissions and gateway origin |
-| `404` | `model_unavailable`, `not_found` | Refresh the model list or check the request path |
+| `404` | `model_unavailable`, `video_not_found`, `not_found` | Check the model, job ID and project key, or verify the request path |
+| `409` | `video_not_ready`, `video_deployment_changed` | Poll until the video completes, or submit to the current deployment after a service change |
 | `409` | `reasoning_policy_unavailable`, `connection_removed` | Refresh configuration or check whether the connection still exists |
 | `409` | `budget_price_required`, `budget_token_ceiling_required` | Set a matching deployment price and verify token ceilings. Supply a supported output limit if relevant |
 | `413` | `request_too_large`, `image_reference_too_large` | Reduce the body or decoded reference size |
-| `415` | `unsupported_media_type` | Send `Content-Type: application/json` |
+| `415` | `unsupported_media_type` | Use JSON or multipart form data, as described by the endpoint |
 | `429` | `connection_busy` | Gateway capacity was exhausted before provider submission. `Retry-After: 2` gives a delay in seconds |
 | `429` | `project_rate_limited`, `project_at_capacity`, `request_body_capacity` | A project limit or the shared request body capacity was reached before provider submission. `Retry-After` gives a delay in seconds |
 | `429` | `project_budget_exceeded` | The remaining monthly budget cannot cover this reservation. Reduce an applicable output limit or review the project budget |
@@ -284,7 +402,10 @@ Configuration writes use the latest integer `revision`, including the JSON body 
 
 | Method | Path | Fields in addition to `revision` |
 | --- | --- | --- |
-| POST | `/admin/connections` | `name`, `type` (`openai`, `ollama`, `codex`), `baseUrl?`, `apiKey?`, `enabled?`, `maxConcurrency?`, `timeoutSeconds?` |
+| POST | `/admin/api-credentials` | `name`, `baseUrl`, `apiKey?`. Returns the credential ID |
+| PATCH | `/admin/api-credentials/:id` | Changed fields above. A new key applies to the linked services |
+| DELETE | `/admin/api-credentials/:id` | `revision` only. The credential must have no linked services |
+| POST | `/admin/connections` | `name`, `type` (`openai`, `ollama`, `codex`, `mflux`, `service`), `service?`, `baseUrl?`, `credentialId?`, `apiKey?`, `enabled?`, `maxConcurrency?`, `timeoutSeconds?` |
 | PATCH | `/admin/connections/:id` | Changed fields above. `type` is fixed after creation |
 | DELETE | `/admin/connections/:id` | `revision` only |
 | POST | `/admin/connections/:id/discover` | `revision` only. Discovers model metadata |
@@ -302,7 +423,7 @@ Configuration writes use the latest integer `revision`, including the JSON body 
 | PATCH | `/admin/usage/prices` | `modelId`, `price` |
 | POST | `/admin/requests/:id/cancel` | Empty JSON object `{}`. Use the active request ID from `/admin/state` |
 
-Key creation returns `token` once. `models` lists permitted model or deployment pool IDs and legacy aliases. For connection edits within the same URL origin, omitting `apiKey` keeps the saved key. Changing the scheme, host or port on a connection with a saved key requires a replacement `apiKey` or an empty string to remove it. Discovery failures preserve the saved catalog and record a diagnostic code. A discovery racing a configuration write can return `409 revision_conflict`.
+Project key creation returns `token` once. `models` lists permitted model or deployment pool IDs and legacy aliases. API connections accept a saved `credentialId` from the same origin. Omit `baseUrl` when attaching a credential to use its saved address. Existing clients can also supply `apiKey` directly when creating or changing a connection. Changing the origin on a keyed connection requires a matching credential, a replacement key, or an empty key to remove authentication. Discovery failures preserve the saved catalog and record a diagnostic code. A discovery racing a configuration write can return `409 revision_conflict`.
 
 ### Deployment pools
 
@@ -316,6 +437,16 @@ The gateway filters by published status, capabilities, available connection slot
 
 `GET /admin/usage` reports admitted executions, with daily, project and model totals and up to 100 recent entries. Use `days` from 1 to 30 (default 7), `project` for a project key ID and `model` for the full model ID. Dates use the gateway’s local time. Add `format=csv` to export all matching entries. Entries keep the project and model names from the request, including after a key has been revoked. They contain request metadata and usage only. Records without measured tokens or a known image count contribute to the unknown usage count.
 
+The console's **AI call records** and **AI usage** read `GET /admin/usage/analytics?version=2` and export through `GET /admin/usage/calls.csv?version=2`. Use `dateFrom` and `dateTo` as inclusive local dates, plus optional `project`, `credential`, `model`, `provider` and `endpoint`. The call table accepts `mode=operations` or `mode=calls` and a zero-based `offset`. Interface types come from gateway records, such as `chat`, `responses`, `images`, `embeddings` and `speech`. Historical records with a generic service endpoint appear under `service`.
+
+The unversioned analytics and CSV URLs support the existing `feature` filter, analytics fields and CSV columns. The `version=2` analytics response exposes `options.endpoints`, `groups.endpoints` and `endpointCount` for task rows. The corresponding CSV uses an `endpoint` column in place of `feature`.
+
+Clients can send `X-Model-Dock-Operation-Id` to group calls from the same project. `X-Model-Dock-Feature` is supported for the legacy analytics and CSV. These optional tags accept up to 160 letters, digits, dots, underscores, colons and dashes. With an operation ID, `X-Model-Dock-Attempt` can identify a retry from 1 to 9999. Native image operations and observed video tasks can also supply a task association. Replayed Codex turns are recorded separately from new Provider attempts.
+
+**AI usage → Costs and reconciliation** uses versioned public list prices for recognized Providers and keeps configured model estimates for project budgets. Import a normalized Provider CSV using the template in the console. Preview matches by credential, local statement dates and exact call, request or task IDs, then import. The local reconciliation ledger preserves import history, unmatched rows and corrections independently of request history. Matches use the 30 days of retained calls. To correct a transaction, append a new statement reference.
+
+For local development, start the gateway with `MODEL_DOCK_USAGE_DEBUG=1`. This enables administrator access to redacted inputs, responses and Provider-reported reasoning when available. The payload store keeps up to 1 MiB per call and 64 MiB total, with the same 30-day retention. Capture errors appear on the call detail. The CSV and ordinary usage ledger contain metadata and measurements.
+
 For text models, `price` has `currency`, `inputPerMillion` and `outputPerMillion`, plus optional verified `maxInputTokens` and `maxOutputTokens` when catalog metadata omits them. For image models, it has `currency` and `perImage`. Use a three-letter uppercase currency code and non-negative prices. `price: null` clears the price. Estimates use the price at submission and apply when usage or output image count is known.
 
 `budget` accepts `{currency, amount}` with a positive amount of up to six decimal places. `budget: null` clears the setting. Accounting starts with budgeted requests and follows the gateway's local calendar month. Changing the amount retains charges already tracked for the same key and currency. The admin snapshot reports settled, reserved, unconfirmed and remaining amounts.
@@ -324,7 +455,7 @@ The gateway reserves the cost before dispatch using a matching price and a verif
 
 ### Atomic model publication
 
-`PATCH /admin/model-settings` validates and stores all publication changes atomically. The `models` array contains every catalog model exactly once with `id` and `enabled`. `reasoningPolicy: {allowedEfforts, defaultEffort}` restricts the model to declared reasoning levels. Supply at least one allowed level and choose the default from it. Omit the field to retain the policy or pass `null` to restore provider behavior. Removing a level used by a saved legacy alias or group returns `409 reasoning_policy_conflict`.
+`PATCH /admin/model-settings` validates and stores all publication changes atomically. The `models` array contains every catalog model exactly once with `id` and `enabled`. `reasoningPolicy: {allowedEfforts, defaultEffort, openEfforts?}` sets the selectable levels and default for calls to the model. All levels must be declared by the model, and the default must be selectable. Set `openEfforts` when the model's open range is wider than `allowedEfforts`. Saved legacy aliases and groups can select from the open range. Removing an open level they use returns `409 reasoning_policy_conflict`. Omit the field to retain the policy or pass `null` to restore provider behavior.
 
 ### Console session
 

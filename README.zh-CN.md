@@ -10,6 +10,10 @@
 
 需要 **Node.js 22.12+**，推荐 Node.js 24 LTS。
 
+在 macOS 的项目目录中双击 **Start Model Dock.command**。服务就绪后，默认浏览器会自动登录并打开「连接与凭证」。服务已在运行时，再次双击即可重新打开管理台。
+
+也可以从终端启动。
+
 ```sh
 git clone https://github.com/idea007/model-dock.git
 cd model-dock
@@ -19,7 +23,7 @@ npm start
 
 管理台默认位于 **http://127.0.0.1:4317**，API Base URL 为 **http://127.0.0.1:4317/v1**。
 
-启动服务后会在默认浏览器中自动打开并登录管理台，无需额外操作。仅运行服务、不打开浏览器时，使用 `npm start -- --no-open`。原有的 `--open` 参数仍然兼容。网关只监听本机地址。
+从终端启动也会自动打开并登录管理台。仅需运行服务时，使用 `npm start -- --no-open`。网关只监听本机地址。
 
 服务运行期间可用 `npm run console` 重新打开并登录管理台。如需在指定浏览器中打开，运行 `npm run --silent console -- --print`，把生成的一次性链接粘贴到地址栏。同一浏览器中打开相同地址会沿用登录状态，最长有效期为 7 天；重启网关会自动打开管理台并重新登录（使用 `--no-open` 时除外）。
 
@@ -37,7 +41,7 @@ npm start
 
 ### 1. 添加模型来源
 
-在「连接与凭证」添加模型 API、Ollama 实例或已登录的本机 Codex CLI。下图以 Codex 为例。保存连接后，在对应卡片点击「发现模型」，查看检查状态和模型数量。
+在「连接与凭证」的「模型 API」保存供应商凭证，或在「本机服务」保存本机地址。服务启用鉴权时填入它的访问令牌。然后到「模型与服务」点击「添加服务」，选择已保存的连接或凭证，再选择服务协议。接入 Ollama 或 Codex 时，保存连接后在对应卡片点击「发现模型」。
 
 ![服务端连接与凭证页面显示本机 Codex 已发现模型](docs/screenshots/server-connections.webp)
 
@@ -148,6 +152,7 @@ Codex 内置认证的适用范围与托管服务不同。商业/托管场景需�
 ## 兼容范围
 
 - `GET /v1/models`
+- `POST /v1/audio/speech`、`POST /v1/audio/transcriptions`、`POST /v1/embeddings` 和 `/v1/videos` 支持已发布的语音、向量及视频服务。使用项目授权的 Model Dock ID，视频提交后可查询并下载。 [音频和向量示例](docs/api.md#audio-and-embeddings) · [视频接口](docs/api.md#video-generation)
 - `POST /v1/chat/completions` 接受字符串或按顺序排列的内容项，每次只返回一个 choice。支持 JSON、SSE、显式拒答、工具调用和结果回传。SSE 在整批调用校验通过后交付工具参数。
 - `POST /v1/responses` 支持模型 API、Ollama 和 Codex 的无状态文本与 SSE。支持工具调用的模型每轮最多交接一个函数，由接入应用执行。使用 `sdk.responses.create()` 调用，默认 `store: false`，由客户端在 `input` 中带回历史。[Responses 示例](docs/api.md#responses)
 - 三种后端的视觉模型都可通过用户消息接收 PNG、JPEG 或 WebP Base64 Data URL。Chat Completions 用 `image_url`，Responses 用 `input_image`。省略 `detail` 或传 `auto`。图片和历史均计入 2 MiB JSON 上限。[图片输入示例](docs/api.md#image-input)
@@ -168,7 +173,8 @@ Codex 内置认证的适用范围与托管服务不同。商业/托管场景需�
 - `master.key`：解密密钥；`admin.token`：本机管理令牌。
 - 文件权限在 POSIX 上为 `0600`，目录为 `0700`。Windows 需使用当前用户专有目录并配置相应 ACL。
 - 原子写入和修订号防止并发覆盖。读取不会重置损坏配置。
-- `usage/` 保留最近 30 天的本机请求元数据。「用量」页面支持按项目和模型筛选、导出 CSV，以及按模型设置单价估算费用。账本里只有请求元数据和用量。
+- 「用量 → AI 调用记录」显示最近 30 天的本机调用，支持按任务展开、筛选明细和导出 CSV。「AI 用量」提供图表联动、分组用量、模型单价与 Provider 账单核销。
+- 常规 `usage/` 账本保存调用元数据和上报的用量。使用 `MODEL_DOCK_USAGE_DEBUG=1` 启动时，新调用的脱敏开发详情单独存储。[本地用量与核销](docs/api.md#project-limits-budgets-and-local-usage)
 - `budgets.json` 按模型单价记录项目月度预算余额和在途预占。
 
 在「项目访问」可为每把密钥设置请求限额和月度预算。网关在调用前预占估算费用，调用后按上报用量结算。启用预算前，在「用量」为模型设置相同币种的单价。[预算与定价规则](docs/api.md#project-limits-budgets-and-local-usage)

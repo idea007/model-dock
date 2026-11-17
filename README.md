@@ -10,6 +10,10 @@ Connect your own model APIs, Ollama, and a signed-in Codex CLI through a single 
 
 Requires **Node.js 22.12+**. Node.js 24 LTS is recommended.
 
+On macOS, double-click **Start Model Dock.command** in the project folder. When the service is ready, your default browser opens **Connections & Credentials** and signs in automatically. Double-click it again to reopen the console while the service is running.
+
+To start from a terminal:
+
 ```sh
 git clone https://github.com/idea007/model-dock.git
 cd model-dock
@@ -19,7 +23,7 @@ npm start
 
 The console runs at **http://127.0.0.1:4317** by default. The API base URL is **http://127.0.0.1:4317/v1**.
 
-Starting the server automatically opens and signs in to the console in your default browser. Use `npm start -- --no-open` to run the service without opening a browser. The existing `--open` option remains supported. The gateway listens only on loopback.
+The terminal startup also opens and signs in to the console automatically. Use `npm start -- --no-open` to run the service without opening a browser. The gateway listens only on loopback.
 
 While the gateway is running, use `npm run console` to reopen and sign in to the console. To open it in a specific browser, run `npm run --silent console -- --print` and paste the one-time URL into its address bar. Tabs at the same address share the sign-in within that browser for up to seven days. Restarting the gateway automatically opens the console and signs in again, unless `--no-open` is used.
 
@@ -37,7 +41,7 @@ Use **简体中文 / English** at the bottom of the sidebar in either app. Each 
 
 ### 1. Add a model source
 
-Open **Connections & credentials** (`连接与凭证`) and add your model API, Ollama instance, or signed-in local Codex CLI. The walkthrough uses Codex. Save the connection, then click **Discover models** (`发现模型`) on its card. The card shows the discovery status and model count.
+In **Connections & credentials** (`连接与凭证`), save a provider credential under **Model API** or a loopback address under **Local services**. Enter a local service token if the service requires one. In **Models & services → Add service**, choose the saved connection or credential and select a protocol. For Ollama or Codex, save the connection and click **Discover models** (`发现模型`) on its card.
 
 ![Server console showing successful model discovery for a local Codex connection](docs/screenshots/server-connections.webp)
 
@@ -148,6 +152,7 @@ Built-in Codex authentication has a different scope from hosted services. For co
 ## Compatibility
 
 - `GET /v1/models`
+- `POST /v1/audio/speech`, `POST /v1/audio/transcriptions`, `POST /v1/embeddings`, and `/v1/videos` use published provider service IDs. Submit, poll, and download video jobs with the owning project key. [Audio and embeddings examples](docs/api.md#audio-and-embeddings) · [Video endpoints](docs/api.md#video-generation)
 - `POST /v1/chat/completions` accepts text and ordered content parts, with one choice per request. It supports JSON, SSE, explicit refusals, and function calls with result replay. SSE delivers tool calls after the full batch passes validation.
 - `POST /v1/responses` supports stateless text, SSE and up to one function call per turn on tool-capable models across OpenAI-compatible APIs, Ollama and Codex. Use `sdk.responses.create()` and carry forward history in `input` with `store: false`. The calling app executes the function. [Responses examples](docs/api.md#responses)
 - Vision-capable models on all three adapters can read PNG, JPEG or WebP Base64 data URLs in user messages. Use `image_url` with Chat Completions or `input_image` with Responses. Omit `detail` or set it to `auto`. Images and history count toward the 2 MiB JSON limit. [Image input examples](docs/api.md#image-input)
@@ -168,7 +173,8 @@ Data is stored in the current user's `~/.model-dock` by default. Set `MODEL_DOCK
 - `master.key`: the decryption key. `admin.token`: the local administrator token.
 - POSIX file permissions are `0600`, and directory permissions are `0700`. On Windows, use a directory private to the current user and configure the corresponding ACLs.
 - Atomic writes and revision checks prevent concurrent overwrites. Reading a corrupted configuration does not reset it.
-- `usage/` holds 30 days of local request metadata. The **Usage** page filters by project and model, exports CSV and supports optional model prices for estimates. The ledger records no prompts, outputs or credentials.
+- **Usage → AI call records** shows 30 days of local calls with task grouping, filters, individual details and CSV export. **AI usage** adds chart filters, usage breakdowns, model prices and Provider statement reconciliation.
+- The standard `usage/` ledger contains call metadata and measured usage. `MODEL_DOCK_USAGE_DEBUG=1` enables separately stored, redacted development details for new calls. [Local usage and reconciliation](docs/api.md#project-limits-budgets-and-local-usage)
 - `budgets.json` stores monthly budget balances and active reservations using local model prices.
 
 Set request limits and an optional monthly budget per key in **Project access**. The budget reserves estimated cost before each call and settles against reported usage. Enter a price in the same currency under **Usage**. [Budget and pricing rules](docs/api.md#project-limits-budgets-and-local-usage)

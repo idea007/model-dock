@@ -7,12 +7,168 @@ import { fileURLToPath } from 'node:url';
 import readline from 'node:readline';
 import OpenAI, { toFile } from 'openai';
 import { sse } from '../packages/protocol/events.mjs';
+import { CodexRequestQueue } from '../packages/core/codex-request-queue.mjs';
 import { setup, until } from './helpers.mjs';
 const imageEndpoint = '/v1/images/generations';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDxoAAAAASUVORK5CYII=', 'base64');
 const pngData = bytes => `data:image/png;base64,${bytes.toString('base64')}`;
 const tools = [{ type: 'function', function: { name: 'weather', parameters: { type: 'object', properties: { city: { type: 'string' } } } } }];
 const chatEndpoint = '/v1/chat/completions';
+
+test('Codex sessions resume native turns, replay without spending tokens and isolate project keys', async t => {
+  const app = await setup(t);
+  const connection = await app.connection('codex'), model = `${connection}/codex-fixture`;
+  await app.enable(model);
+  const key = async name => (await app.mutate('/admin/keys', 'POST', { name, models: [model] })).data;
+  const first = await key('one workspace'), second = await key('another workspace');
+  const model_dock_session = { id: '1'.repeat(64) };
+  const messages = [{ role: 'user', content: 'original fixture turn' }];
+  const body = { model, model_dock_session, messages };
+  const original = await app.request(chatEndpoint, 'POST', body, first.token);
+  assert.equal(original.status, 200, JSON.stringify(original.data));
+  const receipt = original.response.headers.get('location');
+  assert.equal((await app.request(receipt, 'GET', undefined, first.token)).data.status, 'succeeded');
+  assert.equal((await app.request(receipt, 'GET', undefined, second.token)).status, 404);
+  const repeated = await app.request(chatEndpoint, 'POST', body, first.token);
+  assert.deepEqual(repeated.data.choices, original.data.choices);
+  assert.equal(repeated.data.usage.total_tokens, 0);
+  const independent = await app.request(chatEndpoint, 'POST', body, second.token);
+  assert.equal(independent.data.usage.total_tokens, 14);
+  const turn = [...messages, original.data.choices[0].message, { role: 'user', content: 'fixture-session-continue' }];
+  const continued = await app.request(chatEndpoint, 'POST', { ...body, messages: turn }, first.token);
+  assert.equal(continued.data.choices[0].message.content, 'native session resumed');
+  assert.equal(continued.data.usage.total_tokens, 14);
+  const audit = (await app.request(`/admin/usage/analytics?mode=calls&project=${first.id}`)).data;
+  assert.equal(audit.summary.replayed, 1);
+  assert.equal(audit.summary.calls, 2);
+  assert.equal(audit.rows.find(row => row.id === repeated.data.id).kind, 'replay');
+  const branch = await app.request(chatEndpoint, 'POST', { ...body, model_dock_session: { id: '2'.repeat(64), parent_id: model_dock_session.id, mode: 'snapshot' },
+    messages: [{ role: 'user', content: 'fixture-session-fork' }] }, first.token);
+  assert.equal(branch.data.choices[0].message.content, 'native session forked');
+  const directory = `${app.directory}/codex-sessions`;
+  const receipts = await Promise.all((await fs.readdir(directory)).map(file => fs.readFile(`${directory}/${file}`, 'utf8')));
+  assert.equal(receipts.length, 3);
+  assert.ok(receipts.every(record => !record.includes('original fixture turn') && !record.includes('native session resumed')));
+  const large = { model, messages: [{ role: 'user', content: 'a'.repeat(2 * 1024 * 1024) }] };
+  assert.equal((await app.request(chatEndpoint, 'POST', large, first.token)).status, 200);
+  assert.equal((await app.request(chatEndpoint, 'POST', large)).status, 413);
+});
+
+test('Codex image receipts use the owning project store, deduplicate and cancel without losing the operation', async t => {
+  const stores = new Map(), rows = new Map();
+  const app = await setup(t, { imageStores: stores });
+  const connection = await app.connection('codex'), model = `${connection}/codex-imagegen`;
+  await app.enable(model);
+  const key = async name => (await app.mutate('/admin/keys', 'POST', { name, models: [model] })).data;
+  const project = await key('image workspace'), other = await key('other image consumer');
+  let submissions = 0;
+  stores.set(project.id, async (action, values) => {
+    const { id } = values;
+    if (action === 'read') return rows.get(id) || null;
+    if (action === 'claim') {
+      assert.equal(rows.has(id), false);
+      submissions++;
+      const row = { id, input_hash: values.hash, status: 'running' }; rows.set(id, row);
+      return { created: true, row };
+    }
+    const row = rows.get(id);
+    switch (action) {
+      case 'recordIdentity': return Object.assign(row, { thread_id: values.identity.threadId, turn_id: values.identity.turnId });
+      case 'markUnknown': if (row.status !== 'succeeded') Object.assign(row, { status: 'outcome_unknown', error_code: values.code }); return;
+      case 'save': return Object.assign(row, { status: 'succeeded', result: values.result });
+      case 'result': return { data: [{ b64_json: row.result.b64Json }], usage: row.result.usage };
+      default: assert.fail(`Unexpected image storage action ${action}`);
+    }
+  });
+  const catalog = (await app.request('/v1/models', 'GET', undefined, project.token)).data.data;
+  assert.equal(catalog[0].image_operations, true);
+  const body = { model, prompt: 'first image fixture', operation_id: 'a'.repeat(64) };
+  const pair = await Promise.all([app.request(imageEndpoint, 'POST', body, project.token), app.request(imageEndpoint, 'POST', body, project.token)]);
+  assert.deepEqual(pair.map(item => item.status), [202, 202]);
+  assert.deepEqual(pair.map(item => item.data.reused).sort(), [false, true]);
+  const location = pair[0].response.headers.get('location');
+  assert.equal((await app.request(location, 'GET', undefined, other.token)).status, 404);
+  assert.equal((await app.request(imageEndpoint, 'POST', { ...body, prompt: 'different input' }, project.token)).status, 409);
+  await until(() => rows.get(body.operation_id).status === 'succeeded' && app.gateway.active.size === 0);
+  assert.equal((await app.request(`${location}/result`, 'GET', undefined, project.token)).data.data[0].b64_json, png.toString('base64'));
+  assert.equal(submissions, 1);
+  const recoveryId = 'c'.repeat(64);
+  const { thread_id, turn_id } = rows.get(body.operation_id);
+  rows.set(recoveryId, { id: recoveryId, status: 'running', thread_id, turn_id });
+  assert.equal((await app.request(`/v1/images/operations/${recoveryId}`, 'GET', undefined, project.token)).data.status, 'succeeded');
+  assert.equal(submissions, 1);
+
+  const slow = await app.request(imageEndpoint, 'POST', { model, prompt: 'slow-image', operation_id: 'b'.repeat(64) }, project.token);
+  assert.equal(slow.status, 202);
+  const slowLocation = slow.response.headers.get('location');
+  assert.equal((await app.request(`${slowLocation}/cancel`, 'POST', {}, project.token)).data.status, 'outcome_unknown');
+  await until(() => app.gateway.active.size === 0);
+  assert.equal((await app.request(slowLocation, 'GET', undefined, project.token)).data.status, 'outcome_unknown');
+  assert.equal(submissions, 2);
+});
+
+test('Codex requests from separate project keys wait for the single slot', async t => {
+  const app = await setup(t, { codexQueueWaitMs: 2000 });
+  const connectionId = await app.connection('codex');
+  const model = `${connectionId}/codex-fixture`;
+  await app.enable(model);
+  const makeKey = async name => {
+    const result = await app.mutate('/admin/keys', 'POST', { name, models: [model] });
+    assert.equal(result.status, 200);
+    return result.data;
+  };
+  const first = await makeKey('first workspace');
+  const second = await makeKey('second workspace');
+  const third = await makeKey('revoked workspace');
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const slow = fetch(`${app.origin}${chatEndpoint}`, {
+    method: 'POST', signal: controller.signal,
+    headers: { authorization: `Bearer ${first.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'slow' }] })
+  });
+  const stopped = assert.rejects(slow, { name: 'AbortError' });
+  stopped.catch(() => {});
+  await until(() => app.gateway.active.size === 1);
+  const body = { model, messages: [{ role: 'user', content: 'hello' }] };
+  const queued = app.request(chatEndpoint, 'POST', body, second.token);
+  const revoked = app.request(chatEndpoint, 'POST', body, third.token);
+  await until(() => app.gateway.snapshot().codexWaiting === 2);
+  assert.equal(app.gateway.active.size, 1);
+  assert.equal((await app.mutate(`/admin/keys/${third.id}`, 'DELETE')).status, 200);
+  assert.equal((await revoked).data.error.code, 'key_revoked');
+  controller.abort();
+  await stopped;
+  const result = await queued;
+  assert.equal(result.status, 200);
+  assert.equal(result.data.usage.total_tokens, 14);
+  assert.equal(app.gateway.snapshot().codexWaiting, 0);
+  assert.equal(app.gateway.history[0].principalId, second.id);
+});
+
+test('Codex waiters are bounded and time out before taking a slot', async () => {
+  const queue = new CodexRequestQueue(50);
+  const signal = new AbortController().signal;
+  const release = queue.acquire('held', signal, 'first', 'codex');
+  const expires = Array.from({ length: 8 }, (_, index) =>
+    assert.rejects(queue.acquire(String(index), signal, 'next', 'codex'), { code: 'connection_busy' }));
+  assert.throws(() => queue.acquire('extra', signal, 'next', 'codex'), { code: 'connection_busy' });
+  await Promise.all(expires);
+  assert.equal(queue.waitingCount, 0);
+  release();
+  assert.equal(typeof queue.acquire('fresh', signal, 'next', 'codex'), 'function');
+});
+
+test('Codex validates structured text before opening the response stream', async t => {
+  const app = await setup(t), id = await app.connection('codex'), model = `${id}/codex-fixture`;
+  await app.enable(model);
+  const response = await app.request(chatEndpoint, 'POST', {
+    model, messages: [{ role: 'user', content: 'hello' }], stream: true,
+    response_format: { type: 'json_object' }
+  });
+  assert.equal(response.status, 502);
+  assert.equal(response.data.error.code, 'upstream_json_invalid');
+});
 
 test('Codex JSON-RPC bridge isolates host tools, preserves native history, filters commentary and tracks usage', async t => {
   const app = await setup(t), id = await app.connection('codex'), model = `${id}/codex-fixture`;

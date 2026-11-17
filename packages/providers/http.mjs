@@ -1,10 +1,14 @@
 import { GatewayError, normalizeRetryAfter } from '../protocol/index.mjs';
 
-export async function fetchUpstream(url, options = {}) {
+export async function fetchUpstream(url, options = {}, trace) {
   try {
     const response = await fetch(url, { ...options, redirect: 'error' });
+    trace?.headers(response);
     if (!response.ok) {
-      await response.body?.cancel();
+      if (trace?.development && response.headers.get('content-type')?.includes('application/json')) {
+        try { trace.output(await jsonResponse(response, 1024 * 1024)); }
+        catch { trace.development.failure ||= 'invalid_payload'; }
+      } else await response.body?.cancel();
       if (response.status === 429) {
         throw new GatewayError('Upstream rejected the request (HTTP 429).', 429, 'upstream_rate_limited', null,
           { retryAfter: normalizeRetryAfter(response.headers.get('retry-after')) });

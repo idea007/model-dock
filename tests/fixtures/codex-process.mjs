@@ -26,7 +26,9 @@ function checkReferences(params) {
 function finishTurn(thread, status, error) {
   const { threadId, turnId } = thread.turn;
   thread.turn = null;
-  notify('turn/completed', { threadId, turn: { id: turnId, status, ...(error ? { error } : {}) } });
+  const turn = { id: turnId, status, itemsView: 'full', items: [{ type: 'userMessage' }, ...(thread.output || [])], ...(error ? { error } : {}) };
+  if (!thread.ephemeral) thread.completed.push(turn);
+  notify('turn/completed', { threadId, turn });
 }
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const { id, method, params = {} } = JSON.parse(line);
@@ -54,12 +56,23 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   }
   if (method === 'thread/start') {
     if (params.config?.['mcp_servers.inherited.enabled'] !== false || params.config.web_search !== 'disabled' ||
-      params.sandbox !== 'read-only' || params.approvalPolicy !== 'never' || !params.ephemeral || imageChannel && params.dynamicTools?.length) {
+      params.sandbox !== 'read-only' || params.approvalPolicy !== 'never' || typeof params.ephemeral !== 'boolean' || imageChannel && params.dynamicTools?.length) {
       write({ id, error: { message: 'Isolation missing' } }); return;
     }
-    const threadId = `thread_${++next}`; threads.set(threadId, { ...params, history: [] }); ok(id, { thread: { id: threadId } }); return;
+    const threadId = `thread_${++next}`; threads.set(threadId, { ...params, history: [], completed: [] }); ok(id, { thread: { id: threadId } }); return;
   }
   const thread = threads.get(params.threadId);
+  if (method === 'thread/resume' && thread && !thread.ephemeral && params.excludeTurns && params.sandbox === 'read-only') {
+    thread.resumed = true; thread.history = []; ok(id, { thread: { id: params.threadId } }); return;
+  }
+  if (method === 'thread/fork' && thread && !thread.ephemeral && params.excludeTurns && params.sandbox === 'read-only') {
+    const threadId = `thread_${++next}`;
+    threads.set(threadId, { ...thread, history: [], completed: [], forked: true });
+    ok(id, { thread: { id: threadId } }); return;
+  }
+  if (method === 'thread/read' && thread && !thread.ephemeral && params.includeTurns) {
+    ok(id, { thread: { id: params.threadId, turns: thread.completed } }); return;
+  }
   if (method === 'thread/inject_items') { thread.history = params.items; ok(id); return; }
   if (method === 'turn/interrupt') {
     if (!params.turnId || thread?.turn?.turnId !== params.turnId) {
@@ -71,13 +84,14 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     } else finishTurn(thread, 'interrupted');
     return;
   }
-  if (method === 'thread/unsubscribe') { threads.delete(params.threadId); ok(id); return; }
+  if (method === 'thread/unsubscribe') { if (thread?.ephemeral) threads.delete(params.threadId); ok(id); return; }
   if (method === 'turn/start') {
-    const turnId = `turn_${next}`, base = { threadId: params.threadId, turnId }, prompt = params.input.map(item => item.text || '').join('');
+    const turnId = `turn_${++next}`, base = { threadId: params.threadId, turnId }, prompt = params.input.map(item => item.text || '').join('');
     if ([...threads.values()].some(row => row.turn)) {
       write({ id, error: { message: 'Previous fixture turn is still running' } }); return;
     }
     thread.turn = base;
+    thread.output = null;
     thread.prompt = prompt;
     if (imageChannel) {
       if (params.model !== 'codex-fixture' || !prompt.startsWith('$imagegen ') || params.sandboxPolicy?.type !== 'readOnly') {
@@ -94,6 +108,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       }
       if (prompt.endsWith('slow-image')) { ok(id, { turn: { id: turnId } }); return; }
       const result = prompt.endsWith('invalid-image') ? '/private/secret/path.png' : png;
+      thread.output = [{ type: 'imageGeneration', id: 'image', status: 'completed', result }];
       notify('item/completed', { ...base, turnId: 'another-turn', item: { type: 'imageGeneration', id: 'wrong', status: 'completed', result: 'wrong-turn' } });
       notify('item/completed', { ...base, item: { type: 'imageGeneration', id: 'image', status: 'completed', result, savedPath: '/private/secret/path.png' } });
       ok(id, { turn: { id: turnId } });
@@ -150,9 +165,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       notify('item/completed', { ...base, item: final });
       finishTurn(thread, 'completed'); return;
     }
-    notify('thread/tokenUsage/updated', { ...base, tokenUsage: { total: { inputTokens: 10, outputTokens: 4, totalTokens: 14 } } });
+    const multiplier = thread.completed.length + 1;
+    notify('thread/tokenUsage/updated', { ...base, tokenUsage: { total: { inputTokens: 10 * multiplier, outputTokens: 4 * multiplier, totalTokens: 14 * multiplier } } });
     const toolResult = thread.history.find(item => item.type === 'function_call_output');
     let text = toolResult ? `工具结果：${toolResult.output}` : thread.history.some(item => item.role === 'assistant') ? '原生角色历史已保留' : 'Codex 测试回答';
+    if (prompt === 'fixture-session-continue') text = thread.resumed && !thread.history.length ? 'native session resumed' : 'new thread';
+    if (prompt === 'fixture-session-fork') text = thread.forked ? 'native session forked' : 'new thread';
     if (prompt.startsWith('vision-check')) {
       const current = params.input.map(part => part.type === 'image' ? ['image', imageDigest(part.url), part.detail ?? null] : ['text', part.text]);
       const history = thread.history.filter(item => item.role === 'user').map(item => item.content.map(part => (
@@ -162,6 +180,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     }
     notify('item/started', { ...base, item: { id: 'final', type: 'agentMessage', phase: 'final_answer' } });
     notify('item/agentMessage/delta', { ...base, itemId: 'final', delta: text });
+    thread.output = [{ type: 'agentMessage', phase: 'final_answer', text }];
     finishTurn(thread, 'completed'); return;
   }
   write({ id, error: { code: -32601, message: 'Unknown fixture method' } });

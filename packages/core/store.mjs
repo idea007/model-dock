@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes, randomUUID, createHash, createCipheriv, createDecipheriv, timingSafeEqual } from 'node:crypto';
 import { GatewayError, SCHEMA_VERSION } from '../protocol/index.mjs';
+import { apiCredentialName, isApiConnection, providerUrl, validateMfluxToken } from './api-credentials.mjs';
 
 export const digest = value => createHash('sha256').update(String(value)).digest('hex');
 export function equalSecret(value, expectedHash) {
@@ -52,24 +53,73 @@ export class Store {
       try { this.state = JSON.parse(await fs.readFile(this.file, 'utf8')); }
       catch (error) {
         if (error.code !== 'ENOENT') throw new Error('Cannot read state.json. Restore a valid backup.');
-        this.state = { schemaVersion: SCHEMA_VERSION, revision: 0, connections: [], models: [], routes: [], keys: [] };
+        this.state = { schemaVersion: SCHEMA_VERSION, revision: 0, apiCredentials: [], connections: [], models: [], routes: [], keys: [] };
         await writePrivateJson(this.file, this.state);
       }
-      if (![1, SCHEMA_VERSION].includes(this.state.schemaVersion) || !Number.isSafeInteger(this.state.revision)
+      if (![1, 2, 3, SCHEMA_VERSION].includes(this.state.schemaVersion) || !Number.isSafeInteger(this.state.revision)
         || !['connections', 'models', 'routes', 'keys'].every(key => Array.isArray(this.state[key]))
         || this.state.pools !== undefined && !Array.isArray(this.state.pools)) throw new Error('Unsupported or damaged state schema.');
-      // Fail closed if encrypted state and the key no longer match.
       for (const connection of this.state.connections) if (connection.secret) this.decrypt(connection.secret);
-      if (this.state.schemaVersion === 1) {
-        // v2 adds optional reasoning policies and alias groups. Retain every v1
-        // binding, credential and enabled flag, and back up before the atomic write.
-        const backup = path.join(this.directory, `state.v1.${randomUUID()}.backup.json`);
-        await fs.writeFile(backup, `${JSON.stringify(this.state, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-        const migrated = { ...this.state, schemaVersion: SCHEMA_VERSION, revision: this.state.revision + 1 };
-        await writePrivateJson(this.file, migrated); this.state = migrated;
-      }
+      if (this.state.schemaVersion < SCHEMA_VERSION) await this.#migrateApiCredentials();
+      else this.#validateApiCredentials(this.state);
       return this;
     } catch (error) { await this.close(); throw error; }
+  }
+  async #migrateApiCredentials() {
+    const hasCredentialStore = this.state.schemaVersion === 3;
+    if (hasCredentialStore) this.#validateApiCredentials(this.state);
+    const current = hasCredentialStore ? this.state.apiCredentials : [];
+    const ids = new Set(current.map(credential => credential.id));
+    const groups = new Map(current.filter(credential => credential.secret)
+      .map(credential => [this.#credentialIdentity(credential), { id: credential.id }]));
+    const additions = [];
+    const connections = this.state.connections.map(connection => {
+      if (hasCredentialStore ? connection.type !== 'mflux' : !isApiConnection(connection)) return connection;
+      const { secret, ...linked } = connection;
+      // Legacy API rows with no key keep their own identities.
+      const key = secret ? this.#credentialIdentity(connection) : connection.id;
+      let group = groups.get(key);
+      if (!group) {
+        const id = ids.has(connection.id) ? newId('cred') : connection.id;
+        group = { id, sources: [] };
+        ids.add(id);
+        groups.set(key, group);
+        additions.push(group);
+      }
+      group.sources?.push(connection);
+      return { ...linked, credentialId: group.id };
+    });
+    const newCredentials = additions.map(({ id, sources }) => {
+      const { baseUrl, secret } = sources[0];
+      return { id, baseUrl, name: apiCredentialName(sources), secret: secret ?? null };
+    });
+    const migrated = { ...this.state, schemaVersion: SCHEMA_VERSION, revision: this.state.revision + 1,
+      connections, apiCredentials: [...current, ...newCredentials] };
+    this.#validateApiCredentials(migrated);
+    const backup = path.join(this.directory, `state.v${this.state.schemaVersion}.${randomUUID()}.backup.json`);
+    await fs.writeFile(backup, `${JSON.stringify(this.state, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    await writePrivateJson(this.file, migrated);
+    this.state = migrated;
+  }
+  #credentialIdentity({ baseUrl, secret }) {
+    return `${providerUrl(baseUrl).origin}\0${digest(this.decrypt(secret))}`;
+  }
+  #validateApiCredentials(state) {
+    const invalid = () => { throw new Error('Unsupported or damaged API credential configuration.'); };
+    if (!Array.isArray(state.apiCredentials)) invalid();
+    const credentials = new Map();
+    for (const credential of state.apiCredentials) {
+      if (!credential || typeof credential.id !== 'string' || !credential.id || credentials.has(credential.id)
+        || typeof credential.name !== 'string' || !credential.name.trim()) invalid();
+      credentials.set(credential.id, { origin: providerUrl(credential.baseUrl).origin, secret: credential.secret });
+      if (credential.secret) this.decrypt(credential.secret);
+    }
+    for (const connection of state.connections.filter(isApiConnection)) {
+      if (state.schemaVersion === 3 && connection.type === 'mflux') continue;
+      const credential = credentials.get(connection.credentialId);
+      if (connection.secret || credential?.origin !== providerUrl(connection.baseUrl).origin) invalid();
+      if (connection.type === 'mflux') validateMfluxToken(this.decrypt(credential.secret));
+    }
   }
   async #secretFile(name, create) {
     const file = path.join(this.directory, name);
@@ -89,6 +139,14 @@ export class Store {
     const decipher = createDecipheriv('aes-256-gcm', this.key, Buffer.from(secret.iv, 'base64'));
     decipher.setAuthTag(Buffer.from(secret.tag, 'base64'));
     return Buffer.concat([decipher.update(Buffer.from(secret.data, 'base64')), decipher.final()]).toString('utf8');
+  }
+  connectionKey(connection, state = this.state) {
+    if (!isApiConnection(connection)) return connection.secret;
+    const credential = state.apiCredentials.find(item => item.id === connection.credentialId);
+    if (!credential || new URL(credential.baseUrl).origin !== new URL(connection.baseUrl).origin) {
+      throw new GatewayError('The connection requires a saved credential for its origin.', 409, 'credential_unavailable');
+    }
+    return credential.secret;
   }
   read() { return structuredClone(this.state); }
   mutate(revision, operation) {

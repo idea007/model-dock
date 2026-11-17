@@ -3,7 +3,7 @@
   "info": {
     "title": "Model Dock inference API",
     "version": "0.1.0",
-    "description": "Local gateway for project-authorized models. Chat Completions and Responses accept text and images and return text. The image generation endpoint supports a Model Dock reference editing extension. Use the gateway origin and full paths below. The OpenAI SDK base URL ends in /v1."
+    "description": "Local gateway for project-authorized text, image, speech, transcription, embedding and video services. Use the gateway origin and full paths below. The OpenAI SDK base URL ends in /v1."
   },
   "servers": [
     {
@@ -17,6 +17,131 @@
     }
   ],
   "paths": {
+    "/v1/audio/speech": {
+      "post": {
+        "operationId": "createSpeech",
+        "summary": "Synthesize speech using a provider service",
+        "description": "Use a published speech, minimax-speech or edge-tts deployment ID in model. Voice names and audio options depend on the provider.",
+        "parameters": [{ "$ref": "#/components/parameters/ServiceDeployment" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["model", "input", "voice"],
+            "properties": {
+              "model": { "type": "string" }, "input": { "type": "string", "minLength": 1, "maxLength": 4096 },
+              "voice": { "oneOf": [{ "type": "string" }, { "type": "object", "required": ["id"], "properties": { "id": { "type": "string" } } }] },
+              "response_format": { "enum": ["mp3", "wav", "flac", "pcm", "opus", "aac"] },
+              "speed": { "type": "number", "minimum": 0.25, "maximum": 4 },
+              "instructions": { "type": "string" }, "stream_format": { "enum": ["audio", "sse"] }
+            } }, "example": { "model": "conn_0123456789abcdef/speech", "input": "Hello.", "voice": "provider-voice-id", "response_format": "mp3" } } }
+        },
+        "responses": {
+          "200": { "description": "Synthesized audio. The media type depends on the upstream and response format.",
+            "content": { "audio/mpeg": {}, "audio/wav": {}, "audio/flac": {}, "audio/ogg": {}, "audio/aac": {}, "application/octet-stream": {}, "text/event-stream": {} } },
+          "default": { "description": "Gateway or provider error." }
+        }
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "operationId": "createTranscription",
+        "summary": "Transcribe a multipart audio upload using a provider service",
+        "description": "Use an authorized transcription deployment ID in model. Model-only requests accept an audio file up to 25 MiB with a 26 MiB multipart request limit. Upstream-supported form fields are forwarded.",
+        "parameters": [{ "$ref": "#/components/parameters/ServiceDeployment" }],
+        "requestBody": {
+          "required": true,
+          "x-max-body-bytes": 27262976,
+          "x-max-legacy-service-body-bytes": 135266304,
+          "content": { "multipart/form-data": { "schema": { "type": "object", "required": ["model", "file"],
+            "properties": { "model": { "type": "string" }, "file": { "type": "string", "format": "binary" },
+              "response_format": { "type": "string" }, "language": { "type": "string" }, "prompt": { "type": "string" },
+              "timestamp_granularities[]": { "type": "array", "items": { "enum": ["word", "segment"] } }, "stream": { "type": "boolean" } } } } }
+        },
+        "responses": {
+          "200": { "description": "Upstream transcription in the requested response format.",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "text": { "type": "string" } } } },
+              "text/plain": {}, "text/vtt": {}, "text/event-stream": {} } },
+          "default": { "description": "Gateway or provider error." }
+        }
+      }
+    },
+    "/v1/embeddings": {
+      "post": {
+        "operationId": "createEmbeddings",
+        "summary": "Generate embeddings using a provider service",
+        "description": "Use an authorized embedding deployment ID in model. The provider determines supported input sizes, dimensions and encodings.",
+        "parameters": [{ "$ref": "#/components/parameters/ServiceDeployment" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["model", "input"],
+            "properties": { "model": { "type": "string" }, "input": { "type": ["string", "array"] },
+              "dimensions": { "type": "integer", "minimum": 1 }, "encoding_format": { "enum": ["float", "base64"] }, "user": { "type": "string" } } },
+            "example": { "model": "conn_0123456789abcdef/embedding", "input": ["Hello."], "encoding_format": "float" } } }
+        },
+        "responses": {
+          "200": { "description": "Embeddings in the upstream response format.",
+            "content": { "application/json": { "schema": { "type": "object" } } } },
+          "default": { "description": "Gateway or provider error." }
+        }
+      }
+    },
+    "/v1/videos": {
+      "post": {
+        "operationId": "createVideo",
+        "summary": "Submit an asynchronous video generation job",
+        "description": "Use a published local-ltx, seedance, minimax-video or wan service ID. Send a text prompt and optionally one first-frame reference. The provider model determines which durations, sizes and reference modes it accepts.",
+        "parameters": [{ "name": "Idempotency-Key", "in": "header", "description": "On local LTX, reuse the same key and input to recover a submission. Other video services use their native submission semantics.", "schema": { "type": "string" } }],
+        "requestBody": {
+          "required": true,
+          "x-max-body-bytes": 16777216,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/VideoCreateRequest" },
+              "example": { "model": "conn_0123456789abcdef/local-ltx", "prompt": "A small sailboat crosses a calm lake.", "seconds": "4" } },
+            "multipart/form-data": { "schema": { "type": "object", "required": ["model", "prompt"], "additionalProperties": false,
+              "properties": { "model": { "type": "string" }, "prompt": { "type": "string", "minLength": 1, "maxLength": 4000 },
+                "seconds": { "$ref": "#/components/schemas/VideoDuration" }, "size": { "$ref": "#/components/schemas/VideoSize" },
+                "input_reference": { "type": "string", "format": "binary", "description": "One PNG, JPEG or WebP first-frame upload." },
+                "input_reference[image_url]": { "$ref": "#/components/schemas/ImageDataUrl" } } } }
+          }
+        },
+        "responses": {
+          "200": { "description": "Submitted video job. Poll the returned ID until completed or failed.",
+            "headers": { "Location": { "schema": { "type": "string" }, "example": "/v1/videos/video_0123456789abcdef0123456789abcdef" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VideoJob" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "default": { "description": "Gateway or provider error.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
+        }
+      }
+    },
+    "/v1/videos/{id}": {
+      "get": {
+        "operationId": "retrieveVideo",
+        "summary": "Retrieve an owned video job",
+        "parameters": [{ "$ref": "#/components/parameters/VideoId" }],
+        "responses": {
+          "200": { "description": "Latest job status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VideoJob" } } } },
+          "404": { "$ref": "#/components/responses/VideoNotFound" },
+          "default": { "description": "Gateway or provider error.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
+        }
+      }
+    },
+    "/v1/videos/{id}/content": {
+      "get": {
+        "operationId": "downloadVideo",
+        "summary": "Download a completed video",
+        "description": "Set Accept: video/mp4 to receive MP4 bytes through the gateway. Cloud downloads redirect to the provider by default.",
+        "parameters": [{ "$ref": "#/components/parameters/VideoId" }, { "name": "variant", "in": "query", "schema": { "const": "video" } }],
+        "responses": {
+          "200": { "description": "MP4 bytes from local LTX or a cloud download requested with Accept: video/mp4.", "content": { "video/mp4": {} } },
+          "303": { "description": "Follow the cloud provider's signed video download URL.", "headers": { "Location": { "schema": { "type": "string", "format": "uri" } } } },
+          "404": { "$ref": "#/components/responses/VideoNotFound" },
+          "409": { "description": "The job is not ready to download or the deployment has changed.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+          "default": { "description": "Gateway or provider error.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
+        }
+      }
+    },
     "/v1/models": {
       "get": {
         "operationId": "listModels",
@@ -486,7 +611,7 @@
       "post": {
         "operationId": "createImage",
         "summary": "Generate an image or edit references",
-        "description": "Returns a single Base64 image from a published Codex image model. Use images.generate() with an OpenAI SDK for basic generation. Reference-based editing uses the Model Dock reference_images extension on this JSON endpoint. The standard /v1/images/edits endpoint returns 404.",
+        "description": "Returns a single Base64 image from a published Codex or MFLUX image model. Use images.generate() with an OpenAI SDK for basic generation. Reference-based editing uses the Model Dock reference_images extension on this JSON endpoint. The standard /v1/images/edits endpoint returns 404.",
         "requestBody": {
           "required": true,
           "x-max-body-bytes": 73400320,
@@ -596,6 +721,19 @@
     }
   },
   "components": {
+    "parameters": {
+      "ServiceDeployment": {
+        "name": "X-Model-Dock-Service",
+        "in": "header",
+        "description": "Optional legacy passthrough. When supplied, select the deployment with this header and use the native upstream model in the request body. Standard requests use the Model Dock ID in model.",
+        "schema": { "type": "string" }
+      },
+      "VideoId": {
+        "name": "id", "in": "path", "required": true,
+        "description": "Gateway job ID returned by POST /v1/videos. Use the owning project key.",
+        "schema": { "type": "string", "pattern": "^video_[a-f0-9]{32}$" }
+      }
+    },
     "securitySchemes": {
       "bearerAuth": {
         "type": "http",
@@ -621,6 +759,10 @@
       }
     },
     "responses": {
+      "VideoNotFound": {
+        "description": "This project has no video job with this ID, or the deployment is unavailable.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
       "BadRequest": {
         "description": "Malformed JSON, unsupported parameters, or provider request rejection. Invalid image bytes or MIME types use invalid_image_input. Models that declare no image support return unsupported_model_capability. Codex uses context_length_exceeded for context limits and codex_bad_request for native bad requests. Check error.param when provided.",
         "headers": {
@@ -859,6 +1001,38 @@
       }
     },
     "schemas": {
+      "VideoDuration": {
+        "description": "Clip duration in seconds. Actual allowed durations depend on the deployment.",
+        "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 30 }, { "type": "string", "pattern": "^(?:0?[1-9]|[12][0-9]|30)$" }]
+      },
+      "VideoSize": {
+        "description": "Requested size in WIDTHxHEIGHT form. Cloud adapters use the corresponding resolution tier and orientation.",
+        "enum": ["512x320", "768x448", "320x512", "448x768", "1280x720", "720x1280", "1920x1080", "1080x1920", "1792x1024", "1024x1792"]
+      },
+      "VideoCreateRequest": {
+        "type": "object", "required": ["model", "prompt"], "additionalProperties": false,
+        "properties": {
+          "model": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "prompt": { "type": "string", "minLength": 1, "maxLength": 4000 },
+          "seconds": { "$ref": "#/components/schemas/VideoDuration" },
+          "size": { "$ref": "#/components/schemas/VideoSize" },
+          "input_reference": { "type": "object", "required": ["image_url"], "additionalProperties": false,
+            "properties": { "image_url": { "$ref": "#/components/schemas/ImageDataUrl" } } }
+        }
+      },
+      "VideoJob": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "object", "model", "status", "progress", "created_at", "completed_at", "expires_at", "remixed_from_video_id", "prompt", "seconds", "size", "error"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^video_[a-f0-9]{32}$" }, "object": { "const": "video" }, "model": { "type": "string" },
+          "status": { "enum": ["queued", "in_progress", "completed", "failed"] }, "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "created_at": { "type": "integer", "minimum": 0 }, "completed_at": { "type": ["integer", "null"] }, "expires_at": { "type": ["integer", "null"] },
+          "remixed_from_video_id": { "type": "null" }, "prompt": { "type": ["string", "null"] },
+          "seconds": { "type": "string" }, "size": { "$ref": "#/components/schemas/VideoSize" },
+          "error": { "oneOf": [{ "type": "null" }, { "type": "object", "required": ["code", "message"],
+            "properties": { "code": { "type": "string" }, "message": { "type": "string" } } }] }
+        }
+      },
       "ModelCatalog": {
         "type": "object",
         "required": [
@@ -952,6 +1126,8 @@
                       "openai",
                       "ollama",
                       "codex",
+                      "mflux",
+                      "service",
                       "pool"
                     ]
                   }
@@ -960,6 +1136,10 @@
               "capabilities": {
                 "$ref": "#/components/schemas/ModelCapabilities"
               },
+              "image_sizes": { "type": "array", "items": { "type": "string" }, "minItems": 1, "uniqueItems": true },
+              "service": { "type": "string", "description": "Provider service protocol for the scoped service API." },
+              "max_reference_images": { "type": "integer", "minimum": 0 },
+              "model_revision": { "type": "string" },
               "context_window": {
                 "type": [
                   "integer",
@@ -1046,7 +1226,7 @@
           },
           "image_generation": {
             "const": true,
-            "description": "Present for Codex image models."
+            "description": "Present for image generation models."
           }
         }
       },
@@ -2008,7 +2188,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 512,
-            "description": "Full ID of an authorized Codex image model."
+            "description": "Full ID of an authorized image model."
           },
           "prompt": {
             "type": "string",
@@ -2025,6 +2205,11 @@
           "response_format": {
             "const": "b64_json",
             "default": "b64_json"
+          },
+          "size": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,3}x[1-9][0-9]{0,3}$",
+            "description": "Exact image size from the MFLUX model catalog. Omit aspect_ratio when using size."
           },
           "aspect_ratio": {
             "enum": [

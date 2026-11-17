@@ -75,7 +75,8 @@ const translatedErrors = new Map([
   ['Invalid concurrency limit. Codex permits one active request.', 'errors.concurrencyLimit'],
   ['Invalid provider base URL.', 'errors.providerUrl'],
   ['Use HTTPS, or HTTP on loopback. Credentials belong in the API key field.', 'errors.providerHttps'],
-  ['Invalid API key.', 'errors.providerKey']
+  ['Invalid API key.', 'errors.providerKey'],
+  ['Enter the MFLUX service token.', 'errors.mfluxServiceToken']
 ]);
 
 const translatedErrorCodes = new Map([
@@ -95,9 +96,18 @@ const translatedErrorCodes = new Map([
   ['invalid_image_input', 'errors.invalidImageInput'],
   ['reasoning_effort_disabled', 'errors.reasoningLevelDisabled'],
   ['credential_origin_changed', 'errors.credentialOriginChanged'],
+  ['credential_origin_mismatch', 'errors.credentialOriginMismatch'],
+  ['credential_in_use', 'errors.credentialInUse'],
+  ['duplicate_api_credential', 'errors.duplicateApiCredential'],
+  ['credential_unavailable', 'errors.credentialUnavailable'],
   ['invalid_key_limits', 'errors.invalidKeyLimits'],
   ['invalid_usage_currency', 'errors.invalidUsageCurrency'],
   ['invalid_usage_price', 'errors.invalidUsagePrice'],
+  ['invalid_usage_dates', 'errors.invalidUsageDates'],
+  ['invalid_usage_page', 'errors.invalidUsagePage'],
+  ['usage_billing_unavailable', 'errors.usageBillingUnavailable'],
+  ['usage_statement_changed', 'errors.usageStatementChanged'],
+  ['usage_statement_conflict', 'errors.usageStatementConflict'],
   ['project_rate_limited', 'errors.projectRateLimited'],
   ['project_at_capacity', 'errors.projectAtCapacity'],
   ['invalid_model_pool', 'errors.invalidModelPool'],
@@ -109,7 +119,9 @@ const translatedErrorCodes = new Map([
   ['budget_price_required', 'errors.budgetPriceRequired'],
   ['budget_token_ceiling_required', 'errors.budgetTokenCeilingRequired'],
   ['invalid_budget_token_ceiling', 'errors.invalidBudgetTokenCeiling'],
-  ['request_body_capacity', 'errors.requestBodyCapacity']
+  ['request_body_capacity', 'errors.requestBodyCapacity'],
+  ['upstream_model_required', 'errors.upstreamModelRequired'],
+  ['video_failed', 'console.testVideoFailed']
 ]);
 
 export class LocalizedError extends Error {

@@ -19,6 +19,10 @@ The local process is a single trusted operator service. Project keys scope infer
 
 `Store` owns the JSON schema, revision checks, encrypted upstream credentials, private-file permissions, a single-writer lock and atomic replacement. The gateway writes execution metadata to a separate local usage ledger with 30-day retention. Appending a record does not update the configuration revision. The request log only contains metadata and measured usage.
 
+The two usage views project the same ledger into task groups, Provider attempts, aggregated metrics and filtered CSV. Adapters attach actual dispatch metadata and report only counters they observed. Credential attribution uses an opaque version captured at dispatch. Provider statements and corrections use an independent reconciliation ledger. Opt-in development capture writes redacted payloads to a separate private store.
+
+Provider credentials are stored independently of service connections. Schema version 4 includes local MFLUX in the same credential store. On upgrade, the store backs up the previous state and groups eligible connections with the same nonempty key and upstream origin. Their connection IDs, service addresses, model publication and project grants carry over. Provider credentials can be saved before any service references them.
+
 `ProjectBudgets` uses the gateway's single-writer lock and a serialized local ledger. It persists an estimated cost reservation before provider submission. Settlement charges measured usage or carries the reservation as unconfirmed if the outcome is unknown. Outstanding reservations from a previous process are recovered as unconfirmed on startup.
 
 A deployment pool is a separately published model ID with explicitly configured members. The gateway applies project authorization to that ID, filters members by publication and request compatibility, and uses the lowest fraction of occupied connection slots. It rotates ties and tracks connection cooldowns in memory. Usage follows the actual deployment even when the request names a pool.

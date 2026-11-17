@@ -2,7 +2,7 @@ import { decodeImageData, imageDataByteLength, parseImageDataUrl } from './image
 import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes } from './image-options.mjs';
 
 export const VERSION = '0.1.0';
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 4;
 export class GatewayError extends Error {
   constructor(message, status = 400, code = 'invalid_request', param = null, { retryAfter } = {}) {
     super(message); this.name = 'GatewayError'; this.status = status; this.code = code; this.param = param;
@@ -35,7 +35,7 @@ export function slug(value, name = 'alias') {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(result)) fail(`${name} must contain only letters, digits, dots, hyphens or underscores.`);
   return result;
 }
-export const IMAGE_PARAMS = ['model', 'prompt', 'n', 'response_format', 'aspect_ratio', 'reference_images', 'background'];
+export const IMAGE_PARAMS = ['model', 'prompt', 'n', 'response_format', 'size', 'aspect_ratio', 'reference_images', 'background'];
 export function validateImageGeneration(body) {
   exact(body, IMAGE_PARAMS);
   const model = string(body.model, 'model', 512);
@@ -50,13 +50,18 @@ export function validateImageGeneration(body) {
   if (body.aspect_ratio !== undefined && !imageAspectRatios.includes(body.aspect_ratio)) {
     fail(`Choose an aspect_ratio from ${imageAspectRatios.join(', ')}.`, 'invalid_request', 'aspect_ratio');
   }
+  if (body.size !== undefined && (typeof body.size !== 'string' || !/^[1-9][0-9]{0,3}x[1-9][0-9]{0,3}$/.test(body.size)
+    || body.aspect_ratio !== undefined)) {
+    fail('Use WIDTHxHEIGHT for size and omit aspect_ratio.', 'invalid_request', 'size');
+  }
   if (body.background !== undefined && !['auto', 'transparent'].includes(body.background)) {
     fail('Choose background auto or transparent.', 'invalid_request', 'background');
   }
   if (body.reference_images !== undefined && (!Array.isArray(body.reference_images) || body.reference_images.length > maxImageReferences)) {
     fail(`reference_images must be an array of up to ${maxImageReferences} images.`, 'invalid_image_reference', 'reference_images');
   }
-  return { model, prompt: body.prompt.trim(), aspectRatio: body.aspect_ratio, background: body.background };
+  return { model, prompt: body.prompt.trim(), ...(body.size === undefined ? {} : { size: body.size }),
+    aspectRatio: body.aspect_ratio, background: body.background };
 }
 export function decodeImageReferences(references = []) {
   let total = 0;
@@ -197,6 +202,14 @@ export function validateChat(body, contentParam = 'messages') {
   const normalized = { ...body, messages: normalizedMessages ?? body.messages };
   delete normalized.n;
   return normalized;
+}
+export function assertStructuredText(content, type) {
+  try {
+    const parsed = JSON.parse(content);
+    if (type === 'json_object' && (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))) throw new Error();
+  } catch {
+    throw new GatewayError('Provider did not return valid JSON for the requested format.', 502, 'upstream_json_invalid');
+  }
 }
 export function errorPayload(error) {
   const known = error instanceof GatewayError;

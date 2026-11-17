@@ -143,7 +143,7 @@ test('changing an upstream origin requires explicit replacement or removal of it
   assert.deepEqual(app.store.read(), before);
   const replaced = await app.mutate(address, 'PATCH', { baseUrl: 'http://127.0.0.1:9/v1', apiKey: 'replacement-fixture' });
   assert.equal(replaced.status, 200);
-  assert.equal(app.store.decrypt(app.store.read().connections[0].secret), 'replacement-fixture');
+  assert.equal(app.store.decrypt(app.store.connectionKey(app.store.read().connections[0])), 'replacement-fixture');
   const removed = await app.mutate(address, 'PATCH', { baseUrl: `${upstream.origin}/v1`, apiKey: '' });
   assert.equal(removed.status, 200); assert.equal(removed.data.state.connections[0].hasKey, false);
 });

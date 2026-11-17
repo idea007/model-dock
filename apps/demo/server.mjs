@@ -44,6 +44,7 @@ function normalizeCatalog(data) {
     seen.add(row.id);
     return { id: row.id, nativeId: row.id.split('/').slice(1).join('/') || row.id, name: typeof row.name === 'string' ? row.name.slice(0, 300) : row.id, connectionId: row.source.id,
       source: { id: row.source.id, name: typeof row.source.name === 'string' ? row.source.name.slice(0, 100) : row.source.id, type: ['codex', 'ollama', 'pool'].includes(row.source.type) ? row.source.type : 'openai' },
+      ...(row.source.type === 'service' && typeof row.service === 'string' && /^[a-z0-9-]{1,60}$/.test(row.service) && { service: row.service }),
       capabilities: Object.fromEntries(['text', 'tools', 'structured', 'thinking', 'image_input'].map(key => [key, typeof row.capabilities?.[key] === 'boolean' ? row.capabilities[key] : null])),
       contextWindow: Number.isSafeInteger(row.context_window) && row.context_window > 0 ? row.context_window : null,
       reasoningEfforts: Array.isArray(row.reasoning_efforts) ? [...new Set(row.reasoning_efforts.filter(level => typeof level === 'string' && level.length <= 30))] : [],

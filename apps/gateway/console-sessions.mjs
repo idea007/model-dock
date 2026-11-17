@@ -18,7 +18,7 @@ export class ConsoleSessions {
 
   link(origin) {
     const code = issue(this.#links, 'md_console_link', linkLifetime);
-    return `${origin}/#session=${code}`;
+    return `${origin}/?view=connections#session=${code}`;
   }
 
   redeem(code, current) {

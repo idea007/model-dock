@@ -6,7 +6,7 @@ export const retentionDays = 30;
 const detailLimit = 100;
 const dayFile = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
 
-function localDay(value, offset = 0) {
+export function localDay(value, offset = 0) {
   const date = new Date(value);
   date.setDate(date.getDate() + offset);
   const digits = number => String(number).padStart(2, '0');
@@ -179,7 +179,7 @@ export class UsageLedger {
   close() { return this.queue; }
 }
 
-function csvCell(value) {
+export function csvCell(value) {
   if (typeof value === 'number') return String(value);
   const text = String(value ?? '');
   const safe = /^\s*[=+\-@]|^[\t\r\n]/.test(text) ? `'${text}` : text;

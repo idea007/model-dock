@@ -9,11 +9,13 @@ import { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImage
   maxImageRequestBytes, maxImageResultBytes, maxInferenceRequestBytes } from '../packages/protocol/image-options.mjs';
 import { sse } from '../packages/protocol/events.mjs';
 import { fixtureUpstream, setup } from './helpers.mjs';
+import { maxStandardTranscriptionBytes, maxStandardVideoBytes } from '../packages/protocol/media-options.mjs';
 
 const { paths, components } = specification;
 const chat = paths['/v1/chat/completions'].post;
 const responses = paths['/v1/responses'].post;
 const images = paths['/v1/images/generations'].post;
+const video = paths['/v1/videos'].post;
 const json = 'application/json';
 const events = 'text/event-stream';
 const ajv = new Ajv2020({ strict: false, validateFormats: false });
@@ -43,7 +45,13 @@ test('the OpenAPI 3.1 document, payload examples and exported request fields agr
   const validate = ajv.compile(meta);
   assert.ok(validate(specification), ajv.errorsText(validate.errors, { separator: '\n' }));
   assert.equal(specification.info.version, VERSION);
-  assert.deepEqual(Object.keys(paths).sort(), ['/v1/chat/completions', '/v1/images/generations', '/v1/models', '/v1/responses']);
+  assert.deepEqual(Object.keys(paths).sort(), [
+    '/v1/audio/speech', '/v1/audio/transcriptions', '/v1/chat/completions', '/v1/embeddings',
+    '/v1/images/generations', '/v1/models', '/v1/responses', '/v1/videos', '/v1/videos/{id}', '/v1/videos/{id}/content'
+  ]);
+  assert.notEqual(components.parameters.ServiceDeployment.required, true);
+  assert.equal(paths['/v1/audio/transcriptions'].post.requestBody['x-max-body-bytes'], maxStandardTranscriptionBytes);
+  assert.equal(video.requestBody['x-max-body-bytes'], maxStandardVideoBytes);
   const { ChatRequest, ImageRequest, ImageResult, ResponsesRequest } = components.schemas;
   assert.deepEqual(Object.keys(ChatRequest.properties).sort(), [...PARAMS].sort());
   assert.deepEqual(Object.keys(ResponsesRequest.properties).sort(), [...RESPONSES_PARAMS].sort());
@@ -58,12 +66,13 @@ test('the OpenAPI 3.1 document, payload examples and exported request fields agr
   assert.equal(responses.requestBody['x-max-body-bytes'], maxInferenceRequestBytes);
   assert.equal(ImageResult.properties.data.items.properties.b64_json['x-max-decoded-bytes'], maxImageResultBytes);
 
-  const operations = [paths['/v1/models'].get, chat, responses, images];
+  const operations = [paths['/v1/models'].get, chat, responses, images, video, paths['/v1/videos/{id}'].get];
   for (const operation of operations) {
     const payloads = Object.keys(operation.responses).map(status => responseSpec(operation, status).content[json]);
     if (operation.requestBody) payloads.push(operation.requestBody.content[json]);
-    for (const { schema, examples = {} } of payloads) {
+    for (const { schema, example, examples = {} } of payloads) {
       const check = validator(schema);
+      if (example !== undefined) check(example);
       for (const { value } of Object.values(examples)) check(value);
     }
   }

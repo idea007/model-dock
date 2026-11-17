@@ -1,4 +1,4 @@
-import { GatewayError } from '../../packages/protocol/index.mjs';
+import { assertStructuredText, GatewayError } from '../../packages/protocol/index.mjs';
 
 export const completionState = () => ({ content: '', refusal: '', tools: new Map(), finishReason: null });
 
@@ -50,10 +50,7 @@ export function finalizeCompletion(state, body) {
     if (mismatch) throw new GatewayError('Provider did not honor the requested tool selection.', 502, 'upstream_tool_choice_failed');
   }
   if (!tools.length && !state.refusal && ['json_object', 'json_schema'].includes(body.response_format?.type)) {
-    try {
-      const parsed = JSON.parse(state.content);
-      if (body.response_format.type === 'json_object' && (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))) throw new Error();
-    } catch { throw new GatewayError('Provider did not return valid JSON for the requested format.', 502, 'upstream_json_invalid'); }
+    assertStructuredText(state.content, body.response_format.type);
   }
   return tools;
 }

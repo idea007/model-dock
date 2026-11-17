@@ -1,4 +1,4 @@
-import { GatewayError } from '../../protocol/index.mjs';
+import { assertStructuredText, GatewayError } from '../../protocol/index.mjs';
 import { imageInfo } from '../../protocol/image-data.mjs';
 import { maxImageResultBytes } from '../../protocol/image-options.mjs';
 import { CodexClient } from './client.mjs';
@@ -28,6 +28,8 @@ export function createCodexProvider(options = {}) {
   const client = new CodexClient(options);
   const imageClient = new CodexClient({ ...options, imageGeneration: true });
   return {
+    supportsCodexSessions: true,
+    tracesUsage: true,
     async discover(connection, { signal }) {
       const models = await client.models(signal);
       const catalog = models.filter(model => model.id !== imageModelId).map(model => ({
@@ -51,15 +53,28 @@ export function createCodexProvider(options = {}) {
       }
       return catalog;
     },
-    async generateImage(_connection, request, { signal }) {
+    async generateImage(_connection, request, { signal, onIdentity, onImage, trace }) {
       const model = selectImageModel(await imageClient.models(signal));
       if (!model || !await imageClient.supportsImageGeneration(signal)) {
         throw new GatewayError('Native image generation is unavailable in the local Codex runtime.', 503, 'codex_image_unavailable');
       }
-      const { image, usage } = await imageClient.runImage(model.id, request, signal);
-      return { ...encodeImage(image), usage };
+      let encoded;
+      const { image, usage } = await imageClient.runImage(model.id, request, signal, {
+        onIdentity, trace, onImage: onImage && ((result, usage) => {
+          encoded = encodeImage(result);
+          return onImage({ ...encoded, usage });
+        })
+      });
+      const result = encoded || encodeImage(image);
+      trace?.output(result);
+      trace?.stopReason('stop');
+      return { ...result, usage };
     },
-    async *generate(connection, request, { signal, model }) {
+    async recoverImage(identity, signal) {
+      const result = await imageClient.recoverImage(identity, signal);
+      return result ? encodeImage(result) : null;
+    },
+    async *generate(connection, request, { signal, model, session, trace }) {
       const allowed = ['model', 'messages', 'stream', 'stream_options', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'reasoning_effort'];
       for (const key of Object.keys(request)) if (!allowed.includes(key)) throw new GatewayError(`Codex cannot enforce ${key}; omit this parameter.`, 400, 'unsupported_parameter', key);
       if (request.parallel_tool_calls === true) throw new GatewayError('Codex bridge currently hands off one function per request.', 400, 'unsupported_parameter', 'parallel_tool_calls');
@@ -68,7 +83,14 @@ export function createCodexProvider(options = {}) {
       const controller = new AbortController();
       const turnSignal = AbortSignal.any([signal, controller.signal]);
       const queue = []; let wake, finished = false, result, failure;
-      const task = client.run(request, { signal: turnSignal, onDelta(content) { queue.push({ type: 'delta', delta: { content } }); wake?.(); } })
+      const format = request.response_format?.type;
+      const structured = ['json_object', 'json_schema'].includes(format);
+      let structuredText = '';
+      const task = client.run(request, { signal: turnSignal, session, trace, onDelta(content) {
+        trace?.delta({ content });
+        if (structured) structuredText += content;
+        else { queue.push({ type: 'delta', delta: { content } }); wake?.(); }
+      } })
         .then(value => { result = value; }, error => { failure = error; }).finally(() => { finished = true; wake?.(); });
       try {
         while (!finished || queue.length) {
@@ -76,8 +98,18 @@ export function createCodexProvider(options = {}) {
           while (queue.length) yield queue.shift();
         }
         if (failure) throw failure;
-        if (result.toolCalls?.length) yield { type: 'delta', delta: { tool_calls: result.toolCalls.map((call, index) => ({ index, ...call })) } };
+        if (result.replayed) trace?.replay(result.turnId);
+        if (structured && result.finishReason === 'stop') {
+          assertStructuredText(structuredText, format);
+          yield { type: 'delta', delta: { content: structuredText } };
+        }
+        if (result.toolCalls?.length) {
+          const delta = { tool_calls: result.toolCalls.map((call, index) => ({ index, ...call })) };
+          trace?.delta(delta);
+          yield { type: 'delta', delta };
+        }
         if (result.usage) yield { type: 'usage', usage: result.usage };
+        trace?.stopReason(result.finishReason);
         yield { type: 'done', finishReason: result.finishReason };
       } finally {
         if (!finished) {

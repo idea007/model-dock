@@ -28,6 +28,7 @@
     "packages/",
     "examples/",
     "docs/",
+    "Start Model Dock.command",
     "README.md",
     "README.zh-CN.md",
     "LICENSE",

@@ -7,12 +7,18 @@ const code = value => `<code>${escape(value)}</code>`;
 const mib = bytes => `${bytes / (1024 * 1024)} MiB`;
 const copyIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></svg>';
 
-function curl(url, body, { auth = true, stream = false } = {}) {
+export function curl(url, body, { auth = true, stream = false, output, follow = false } = {}) {
   return [
-    `curl${stream ? ' -N' : ''} ${quote(url)}`,
+    `curl${stream ? ' -N' : ''}${output ? ' --fail' : ''}${follow ? ' -L' : ''} ${quote(url)}`,
     ...(auth ? ['  -H "Authorization: Bearer $MODEL_DOCK_API_KEY"'] : []),
-    ...(body ? ['  -H "Content-Type: application/json"', `  -d ${quote(json(body))}`] : [])
+    ...(body ? ['  -H "Content-Type: application/json"', `  -d ${quote(json(body))}`] : []),
+    ...(output ? [`  --output ${quote(output)}`] : [])
   ].join(' \\\n');
+}
+
+export function formCurl(url, fields, file) {
+  return [curl(url), ...Object.entries(fields).map(([key, value]) => `  --form-string ${quote(`${key}=${value}`)}`),
+    `  -F ${quote(file)}`].join(' \\\n');
 }
 
 function imageFileCurl(url, model, prompt, body) {
@@ -69,6 +75,12 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
   const publishedImageId = imageModelId || models.find(model => model.capability === 'image_generation')?.id;
   const textId = textModel?.id || 'connection-id/model-id';
   const imageId = publishedImageId || 'connection-id/codex-imagegen';
+  const speech = models.find(model => ['speech', 'minimax-speech', 'edge-tts'].includes(model.service));
+  const transcription = models.find(model => model.service === 'transcription');
+  const embedding = models.find(model => model.service === 'embedding');
+  const video = models.find(model => model.service === 'local-ltx') || models.find(model => ['seedance', 'minimax-video', 'wan'].includes(model.service));
+  const videoId = video?.id || 'connection-id/local-ltx';
+  const videoTaskUrl = `${baseUrl}/videos/VIDEO_ID`;
   const { imageAspectRatios, maxImageReferences, maxImageReferenceBytes, maxImageReferenceTotalBytes, maxImageRequestBytes, maxImageResultBytes, maxInferenceRequestBytes } = imageOptions;
   const chatBody = { model: textId, messages: [{ role: 'user', content: t('docs.greetingPrompt') }] };
   const responsesBody = { model: textId, input: t('docs.greetingPrompt'), store: false };
@@ -87,6 +99,7 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
       [code('data[].id'), t('docs.modelIdField')],
       [code('data[].name / source'), t('docs.modelSourceField')],
       [code('data[].capabilities'), t('docs.capabilitiesField')],
+      [code('data[].service'), t('docs.serviceProfileField')],
       [code('data[].context_window'), t('docs.contextField')],
       [code('data[].reasoning_efforts'), t('docs.effortsField')],
       [code('data[].default_reasoning_effort'), t('docs.defaultEffortField')],
@@ -200,6 +213,7 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
       [code('model'), t('docs.requiredString'), t('docs.imageModelField')],
       [code('prompt'), t('docs.requiredString'), t('docs.imagePromptField')],
       [code('reference_images'), t('docs.optionalStrings'), t('docs.referenceImagesField', maxImageReferences, mib(maxImageReferenceBytes), mib(maxImageReferenceTotalBytes))],
+      [code('size'), t('docs.optionalString'), t('docs.imageSizeField')],
       [code('aspect_ratio'), t('docs.optionalString'), t('docs.aspectRatioField', imageAspectRatios.map(code).join(languageSeparator()))],
       [code('background'), t('docs.optionalString'), t('docs.backgroundField', code('auto'), code('transparent'))],
       [code('n / response_format'), t('docs.optional'), t('docs.imageOutputFields', mib(maxImageRequestBytes))]
@@ -215,12 +229,56 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
     <p class="api-note">${t('docs.continueImageHelp', code('data:image/${output_format};base64,${data[0].b64_json}'))}</p>
   `, expanded);
 
+  const speechVoice = speech?.service === 'edge-tts' ? 'zh-CN-XiaoxiaoNeural'
+    : speech?.service === 'minimax-speech' ? 'male-qn-qingse' : t('docs.voicePlaceholder');
+  const media = [
+    endpoint('speech', 'POST', '/v1/audio/speech', t('docs.speech'), t('docs.speechSummary'), `
+      <p>${t('docs.speechHelp')}</p>
+      ${modelHint(speech?.id, t('docs.speech'), client)}
+      ${block('speech-request', t('docs.speechCurl'), curl(`${baseUrl}/audio/speech`, {
+        model: speech?.id || 'connection-id/speech', input: t('docs.greetingPrompt'), voice: speechVoice, response_format: 'mp3'
+      }, { output: 'speech.mp3' }), t('docs.copyCurl'))}
+      <p class="api-note">${t('docs.speechFields')}</p>`, expanded),
+    endpoint('transcription', 'POST', '/v1/audio/transcriptions', t('docs.transcription'), t('docs.transcriptionSummary'), `
+      <p>${t('docs.transcriptionHelp')}</p>
+      ${modelHint(transcription?.id, t('docs.transcription'), client)}
+      ${block('transcription-request', t('docs.transcriptionCurl'), formCurl(`${baseUrl}/audio/transcriptions`, {
+        model: transcription?.id || 'connection-id/transcription', response_format: 'json'
+      }, 'file=@audio.wav'), t('docs.copyCurl'))}
+      ${block('transcription-response', t('docs.successResponse'), json({ text: t('docs.chatResponse') }))}`, expanded),
+    endpoint('embeddings', 'POST', '/v1/embeddings', t('docs.embeddings'), t('docs.embeddingsSummary'), `
+      <p>${t('docs.embeddingsHelp')}</p>
+      ${modelHint(embedding?.id, t('docs.embeddings'), client)}
+      ${block('embeddings-request', t('docs.embeddingsCurl'), curl(`${baseUrl}/embeddings`, {
+        model: embedding?.id || 'connection-id/embedding', input: [t('docs.greetingPrompt')], encoding_format: 'float'
+      }), t('docs.copyCurl'))}`, expanded),
+    endpoint('video-create', 'POST', '/v1/videos', t('docs.videoCreate'), t('docs.videoCreateSummary'), `
+      <p>${t('docs.videoCreateHelp')}</p>
+      ${modelHint(video?.id, t('docs.videoKind'), client)}
+      <p class="api-note">${t('docs.videoBindingHelp')}</p>
+      ${block('video-create-request', t('docs.videoCreateCurl'), curl(`${baseUrl}/videos`, {
+        model: videoId, prompt: t('docs.videoPrompt'), seconds: '4'
+      }), t('docs.copyCurl'))}
+      ${block('video-frame-request', t('docs.videoImageCurl'), formCurl(`${baseUrl}/videos`, {
+        model: videoId, prompt: t('docs.videoPrompt'), seconds: '4'
+      }, 'input_reference=@frame.png'), t('docs.copyCurl'))}
+      ${block('video-create-response', t('docs.successResponse'), json({ id: 'video_0123456789abcdef0123456789abcdef', object: 'video',
+        model: videoId, status: 'queued', progress: 0, created_at: 0, seconds: '4', size: video?.service === 'local-ltx' || !video ? '768x448' : '1280x720', error: null }))}`, expanded),
+    endpoint('video-status', 'GET', '/v1/videos/{id}', t('docs.videoStatus'), t('docs.videoStatusSummary'), `
+      <p>${t('docs.videoStatusHelp')}</p>
+      ${block('video-status-request', t('docs.videoStatusCurl'), curl(videoTaskUrl), t('docs.copyCurl'))}`, expanded),
+    endpoint('video-content', 'GET', '/v1/videos/{id}/content', t('docs.videoContent'), t('docs.videoContentSummary'), `
+      <p>${t('docs.videoContentHelp')}</p>
+      ${block('video-content-request', t('docs.videoContentCurl'), curl(`${videoTaskUrl}/content`, undefined, { follow: true, output: 'video.mp4' }), t('docs.copyCurl'))}`, expanded)
+  ];
+
   const health = endpoint('health', 'GET', '/healthz', t('docs.health'), t('docs.healthSummary'), `
     <p>${t('docs.healthHelp')}</p>
     ${block('health-request', t('docs.healthCurl'), curl(`${origin}/healthz`, undefined, { auth: false }), t('docs.copyCurl'))}
     ${block('health-response', t('docs.successResponse'), json({ ok: true, version }))}
   `, expanded, false);
 
+  const endpoints = [catalog, chat, responses, images, ...media, health];
   const keyView = client ? 'settings' : 'keys';
   const keyLink = client ? t('client.settings') : t('docs.manageKeys');
   return `<div class="api-docs">
@@ -231,19 +289,21 @@ export function apiDocsPage({ baseUrl: gatewayUrl, models, imageModelId, version
       <p class="api-note">${t('docs.authHelp')}</p>
       <p class="api-note"><a href="/openapi.json" download="model-dock.openapi.json">${t('docs.openapiDownload')}</a></p>
     </section>
-    <div class="section-header between wrap"><h2 id="api-list-title">${t('docs.endpoints')} <span class="api-count">5</span></h2><span class="muted">${t('docs.expandHelp')}</span></div>
-    <section class="api-endpoints" aria-labelledby="api-list-title">${catalog}${chat}${responses}${images}${health}</section>
+    <div class="section-header between wrap"><h2 id="api-list-title">${t('docs.endpoints')} <span class="api-count">${endpoints.length}</span></h2><span class="muted">${t('docs.expandHelp')}</span></div>
+    <section class="api-endpoints" aria-labelledby="api-list-title">${endpoints.join('')}</section>
     <section class="card api-errors" aria-labelledby="api-errors-title"><h2 id="api-errors-title">${t('docs.errorHandling')}</h2><p>${t('docs.errorHelp')}</p>
       ${block('error', t('docs.errorExample'), json({ error: { message: 'This key cannot use the selected model.', type: 'invalid_request_error', code: 'model_forbidden', param: null } }))}
       ${table([t('docs.httpStatus'), t('docs.errorCodes'), t('docs.errorResolution')], [
         ['400', code('invalid_request / unsupported_parameter / unsupported_model_capability / invalid_image_input'), t('docs.badRequestHelp')],
         ['400', code('context_length_exceeded'), t('errors.codexContextLength')],
+        ['400', code('upstream_model_required'), t('docs.videoBindingHelp')],
         ['401', code('unauthorized / key_revoked'), t('docs.unauthorizedHelp')],
         ['403', code('model_forbidden'), t('docs.forbiddenHelp')],
         ['404', code('model_unavailable'), t('docs.modelUnavailableHelp')],
+        ['404 / 409', code('video_not_found / video_not_ready'), t('docs.videoStatusHelp')],
         ['409', code('budget_price_required / budget_token_ceiling_required'), t('docs.budgetRequirements')],
         ['413', code('request_too_large / image_reference_too_large'), t('docs.tooLargeHelp')],
-        ['415', code('unsupported_media_type'), code('Content-Type: application/json')],
+        ['415', code('unsupported_media_type'), `${code('application/json')} / ${code('multipart/form-data')}`],
         ['429', code('connection_busy'), t('docs.busyHelp')],
         ['429', code('project_rate_limited / project_at_capacity / request_body_capacity'), t('docs.localLimitsHelp')],
         ['429', code('project_budget_exceeded'), t('errors.projectBudgetExceeded')],

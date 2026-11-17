@@ -255,7 +255,7 @@ test('persisted credentials and choices survive a restart without creating a new
   t.after(() => reopened.close());
   assert.equal(reopened.read().revision, revision); assert.equal(reopened.adminToken, admin);
   assert.equal(reopened.read().connections[0].id, id);
-  assert.equal(reopened.decrypt(reopened.read().connections[0].secret), 'fixture-upstream');
+  assert.equal(reopened.decrypt(reopened.connectionKey(reopened.read().connections[0])), 'fixture-upstream');
 });
 
 test('missing private identity files fail closed without regenerating credentials or changing state', async t => {

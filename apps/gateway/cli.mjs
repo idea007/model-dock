@@ -76,7 +76,11 @@ export async function main(args = process.argv.slice(2)) {
     else openConsole(url);
     return;
   }
-  const app = await startGateway({ directory: dataDirectory(), port });
+  const codexQueueWaitMs = Number(process.env.MODEL_DOCK_CODEX_QUEUE_WAIT_MS || 0);
+  if (!Number.isInteger(codexQueueWaitMs) || codexQueueWaitMs < 0 || codexQueueWaitMs > 120_000) {
+    throw new Error('MODEL_DOCK_CODEX_QUEUE_WAIT_MS must be an integer between 0 and 120000.');
+  }
+  const app = await startGateway({ directory: dataDirectory(), port, codexQueueWaitMs });
   const consoleStatus = open
     ? 'Opening the console in your default browser with automatic sign-in.'
     : `Open the console later with: model-dock open --port ${port} (or npm run console -- --port ${port})`;

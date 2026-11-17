@@ -22,7 +22,8 @@ try {
   app = await startGateway({ directory: path.join(temporary, 'data'), port: 0, providers: { openai: {
     async *generate() { yield { type: 'delta', delta: { content: 'Package smoke response' } }; yield { type: 'done', finishReason: 'stop' }; }
   } } });
-  for (const endpoint of ['/', '/assets/app.mjs', '/assets/style.css', '/assets/models.css', '/assets/api-docs.mjs', '/assets/api-docs.css', '/assets/events.mjs', '/assets/image-options.mjs', '/assets/i18n.css', '/packages/ui/i18n.mjs', '/packages/ui/messages.mjs', '/healthz']) {
+  for (const endpoint of ['/', '/assets/app.mjs', '/assets/playground-media.mjs', '/assets/style.css', '/assets/models.css', '/assets/api-docs.mjs', '/assets/api-docs.css', '/assets/events.mjs', '/assets/image-options.mjs', '/packages/protocol/media-options.mjs', '/assets/i18n.css', '/packages/ui/i18n.mjs', '/packages/ui/messages.mjs', '/healthz',
+    '/assets/usage.mjs', '/assets/usage-view.mjs', '/assets/usage-charts.mjs', '/assets/usage-billing.mjs', '/assets/usage.css']) {
     const response = await fetch(app.origin + endpoint);
     if (!response.ok) throw new Error(`Installed artifact missing ${endpoint}`);
     await response.arrayBuffer();
@@ -53,7 +54,8 @@ try {
   const initial = await api('/api/state');
   if (initial.connection.configured || initial.models.length) throw new Error('Installed client must start without simulated models.');
   await app.store.mutate(app.store.read().revision, state => {
-    state.connections.push({ id: 'smoke', name: 'Package test', type: 'openai', baseUrl: 'http://127.0.0.1', enabled: true, status: 'connected', maxConcurrency: 4, timeoutSeconds: 60 });
+    state.apiCredentials.push({ id: 'smoke-key', name: 'Package test', baseUrl: 'http://127.0.0.1', secret: null });
+    state.connections.push({ id: 'smoke', name: 'Package test', type: 'openai', credentialId: 'smoke-key', baseUrl: 'http://127.0.0.1', enabled: true, status: 'connected', maxConcurrency: 4, timeoutSeconds: 60 });
     state.models.push({ id: 'smoke/chat', nativeId: 'chat', name: 'Package chat', connectionId: 'smoke', enabled: true, available: true, capabilities: { text: true }, reasoningEfforts: [] });
   });
   const { token } = await app.gateway.createKey({ revision: app.store.read().revision, name: 'Package client', models: ['smoke/chat'] });

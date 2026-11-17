@@ -1,6 +1,6 @@
 # Compatibility contract · v0.1
 
-Model Dock implements OpenAI-compatible text generation from text or images through Chat Completions and Responses, with a separate Codex image generation endpoint. Chat requests use one model and one choice. Omit `n` or set it to `1`. The gateway joins pure text arrays in order, preserves image parts in user messages and turns omitted assistant tool-call content into `null`. See the [OpenAPI 3.1 specification](openapi.json) for request and response schemas.
+Model Dock implements OpenAI-compatible text generation from text or images through Chat Completions and Responses. Codex and MFLUX publish image models on the shared image generation endpoint. Chat requests use one model and one choice. Omit `n` or set it to `1`. The gateway joins pure text arrays in order, preserves image parts in user messages and turns omitted assistant tool-call content into `null`. See the [OpenAPI 3.1 specification](openapi.json) for request and response schemas.
 
 ## Chat Completions and other endpoints
 
@@ -23,6 +23,10 @@ Model Dock implements OpenAI-compatible text generation from text or images thro
 | Usage | Reported by provider | eval counters | Complete native cumulative counters only |
 | Image generation and editing (`/v1/images/generations`) | Not exposed | Not exposed | `codex-imagegen`. SDK `images.generate()` for basic generation, Model Dock `reference_images` JSON extension for edits |
 | Audio/video/embeddings | Not exposed | Not exposed | Not exposed |
+
+MFLUX serves images through `POST /v1/images/generations`. Published MFLUX deployments advertise exact sizes and reference counts in the project catalog. [MFLUX API details](api.md#mflux)
+
+Published provider services support separate standard endpoints for [speech, transcription and embeddings](api.md#audio-and-embeddings) and [asynchronous video generation](api.md#video-generation). Use the service's Model Dock ID as the request model. Video uses the submit, retrieve and download methods of the OpenAI SDK. Provider-specific options are available on the native service paths.
 
 ## Responses
 

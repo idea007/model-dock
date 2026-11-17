@@ -5,6 +5,7 @@ const tokenLimit = value => Number.isSafeInteger(value) && value > 0 ? value : n
 const effortName = value => typeof value === 'string' && value.length > 0 && value.length <= 30 && value.trim() === value && !/[\u0000-\u001f]/u.test(value);
 
 export const openai = {
+  tracesUsage: true,
   async discover(connection, { secret, signal }) {
     const result = await jsonResponse(await fetchUpstream(`${connection.baseUrl}/models`, { headers: headers(secret), signal }));
     if (!Array.isArray(result.data)) throw protocolError();
@@ -22,17 +23,23 @@ export const openai = {
       };
     });
   },
-  async *generate(connection, request, { secret, signal, responses, budgeted }) {
+  async *generate(connection, request, { secret, signal, responses, budgeted, trace }) {
     const body = { ...request, ...(responses && { store: false }) };
     if ((responses || budgeted) && request.stream && new URL(connection.baseUrl).origin === 'https://api.openai.com') {
       body.stream_options = { include_usage: true };
     }
+    trace?.start(body, secret);
     const response = await fetchUpstream(`${connection.baseUrl}/chat/completions`, {
       method: 'POST', headers: headers(secret), body: JSON.stringify(body), signal
-    });
+    }, trace);
     if (!request.stream) {
       const result = await jsonResponse(response);
       const choice = result.choices?.[0];
+      trace?.identify(result.id);
+      trace?.usage(result.usage);
+      trace?.output(result);
+      trace?.reasoning(choice?.message?.reasoning_content ?? choice?.message?.reasoning);
+      trace?.stopReason(choice?.finish_reason);
       if (!choice?.message || !choice.finish_reason) throw protocolError();
       const message = choice.message;
       if (message.content != null && typeof message.content !== 'string') throw protocolError();
@@ -51,15 +58,21 @@ export const openai = {
       for await (const data of sse(response.body)) {
         if (data === '[DONE]') { ended = true; break; }
         const result = JSON.parse(data);
+        trace?.identify(result.id);
+        trace?.usage(result.usage);
         if (result.error) throw protocolError();
         for (const choice of result.choices || []) {
           if (choice.index && choice.index !== 0) throw protocolError();
-          if (choice.delta) yield { type: 'delta', delta: choice.delta };
+          if (choice.delta) {
+            trace?.delta(choice.delta);
+            yield { type: 'delta', delta: choice.delta };
+          }
           if (choice.finish_reason) finishReason = choice.finish_reason;
         }
         if (usage(result.usage)) yield { type: 'usage', usage: usage(result.usage) };
       }
     } catch (error) { if (signal.aborted) throw signal.reason; throw protocolError(); }
+    trace?.stopReason(finishReason);
     if (!ended || !finishReason) throw protocolError();
     yield { type: 'done', finishReason };
   }

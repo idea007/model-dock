@@ -27,7 +27,8 @@ export async function startMockGateway() {
   try {
     app = await startGateway({ directory, port: 0, providers: { openai: provider } });
     await app.store.mutate(0, state => {
-      state.connections.push({ id: 'demo-source', name: '模拟模型服务', type: 'openai', baseUrl: 'http://127.0.0.1', enabled: true, status: 'connected', maxConcurrency: 4, timeoutSeconds: 60 });
+      state.apiCredentials.push({ id: 'demo-source-key', name: '模拟模型服务', baseUrl: 'http://127.0.0.1', secret: null });
+      state.connections.push({ id: 'demo-source', name: '模拟模型服务', type: 'openai', credentialId: 'demo-source-key', baseUrl: 'http://127.0.0.1', enabled: true, status: 'connected', maxConcurrency: 4, timeoutSeconds: 60 });
       state.models.push(...['demo-chat', 'demo-reasoner'].map((name, index) => ({ id: `demo-source/${name}`, nativeId: name, name, connectionId: 'demo-source', enabled: true, available: true, capabilities: { text: true, structured: true, tools: false, thinking: Boolean(index) }, contextWindow: 32768, reasoningEfforts: index ? ['none', 'low', 'medium', 'high'] : [], defaultEffort: index ? 'medium' : null })));
     });
     const { token } = await app.gateway.createKey({ revision: app.store.read().revision, name: 'Isolated client demo', models: app.store.read().models.map(model => model.id) });

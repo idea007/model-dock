@@ -12,6 +12,7 @@ export function modelMetadata(model) {
     capabilities: { ...Object.fromEntries(capabilityKeys.map(key => [key, typeof model.capabilities?.[key] === 'boolean' ? model.capabilities[key] : null])),
       ...(model.capability === 'image_generation' ? { image_generation: true } : {}) },
     context_window: model.contextWindow || null,
+    ...(model.imageSizes && { image_sizes: model.imageSizes, max_reference_images: model.maxReferenceImages, model_revision: model.revision }),
     reasoning_efforts: declared.filter(level => allowed.includes(level)),
     default_reasoning_effort: model.reasoningPolicy?.defaultEffort || model.defaultEffort || null
   };

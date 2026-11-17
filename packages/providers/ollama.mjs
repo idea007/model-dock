@@ -6,6 +6,7 @@ import { fetchUpstream, jsonResponse, headers, protocolError } from './http.mjs'
 
 const unsupported = key => { throw new GatewayError(`Ollama adapter does not support ${key}.`, 400, 'unsupported_parameter', key); };
 export const ollama = {
+  tracesUsage: true,
   async discover(connection, { secret, signal }) {
     const result = await jsonResponse(await fetchUpstream(`${connection.baseUrl}/api/tags`, { headers: headers(secret), signal }));
     if (!Array.isArray(result.models)) throw protocolError();
@@ -33,7 +34,7 @@ export const ollama = {
     }
     return models;
   },
-  async *generate(connection, request, { secret, signal, model }) {
+  async *generate(connection, request, { secret, signal, model, trace }) {
     if (request.user !== undefined) unsupported('user');
     if (request.parallel_tool_calls === true) unsupported('parallel_tool_calls');
     if (request.tool_choice !== undefined && !['auto', 'none'].includes(request.tool_choice)) unsupported('tool_choice');
@@ -65,26 +66,30 @@ export const ollama = {
     }
     if (request.response_format?.type === 'json_object') body.format = 'json';
     if (request.response_format?.type === 'json_schema') body.format = request.response_format.json_schema.schema;
-    const response = await fetchUpstream(`${connection.baseUrl}/api/chat`, { method: 'POST', headers: headers(secret), body: JSON.stringify(body), signal });
+    trace?.start(body, secret);
+    const response = await fetchUpstream(`${connection.baseUrl}/api/chat`, { method: 'POST', headers: headers(secret), body: JSON.stringify(body), signal }, trace);
     let done = false, hasTools = false, index = 0;
     try {
       for await (const line of lines(response.body)) {
         if (!line.trim()) continue;
         const value = JSON.parse(line); if (value.error) throw protocolError();
+        trace?.delta({ content: value.message?.content, thinking: value.message?.thinking });
         if (value.message?.content) yield { type: 'delta', delta: { content: value.message.content } };
         for (const call of value.message?.tool_calls || []) {
           const fn = call?.function;
           if (!fn?.name || !fn.arguments || typeof fn.arguments !== 'object' || Array.isArray(fn.arguments)) throw protocolError();
           const id = call.id == null || call.id === '' ? `call_${randomUUID()}` : call.id;
           hasTools = true;
-          yield { type: 'delta', delta: { tool_calls: [{ index: index++, id, type: 'function',
-            function: { name: fn.name, arguments: JSON.stringify(fn.arguments) } }] } };
+          const delta = { tool_calls: [{ index: index++, id, type: 'function', function: { name: fn.name, arguments: JSON.stringify(fn.arguments) } }] };
+          trace?.delta(delta);
+          yield { type: 'delta', delta };
         }
         if (value.done === true) {
           if ([value.prompt_eval_count, value.eval_count].every(x => Number.isSafeInteger(x) && x >= 0)) yield { type: 'usage', usage: {
             prompt_tokens: value.prompt_eval_count, completion_tokens: value.eval_count, total_tokens: value.prompt_eval_count + value.eval_count
           } };
           const finishReason = ['length', 'content_filter'].includes(value.done_reason) ? value.done_reason : hasTools ? 'tool_calls' : 'stop';
+          trace?.stopReason(finishReason);
           yield { type: 'done', finishReason };
           done = true; break;
         }
