@@ -1,0 +1,34 @@
+{
+  "defaultModel": "flux2-klein-4b",
+  "protocolVersion": 2,
+  "requiredFiles": [
+    "transformer/0.safetensors",
+    "transformer/1.safetensors",
+    "text_encoder/0.safetensors",
+    "text_encoder/1.safetensors",
+    "vae/0.safetensors",
+    "tokenizer/tokenizer.json"
+  ],
+  "models": {
+    "flux2-klein-4b": {
+      "label": "FLUX.2 klein 4B Q4",
+      "directory": "flux2-klein-4b-q4",
+      "repo": "mflux-community/flux2-klein-4b-mflux-q4",
+      "revision": "77090341902cb5f9217f05c664ff604236ca18cc",
+      "steps": 4,
+      "guidance": 1.0,
+      "maxReferenceImages": 4,
+      "modes": ["text", "reference"]
+    },
+    "z-image-turbo": {
+      "label": "Z-Image-Turbo Q4",
+      "directory": "z-image-turbo-q4",
+      "repo": "mflux-community/z-image-turbo-mflux-q4",
+      "revision": "d2d30500c4bc0d19770bd952951df3e7c635ae9e",
+      "steps": 9,
+      "guidance": 0.0,
+      "maxReferenceImages": 0,
+      "modes": ["text"]
+    }
+  }
+}

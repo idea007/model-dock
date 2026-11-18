@@ -6,8 +6,31 @@ import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { realpathSync } from 'node:fs';
+import { parseEnv } from 'node:util';
 import { startGateway } from './server.mjs';
 import { VERSION } from '../../packages/protocol/index.mjs';
+
+const configRoot = new URL('../../', import.meta.url);
+const fileSettings = [
+  'MODEL_DOCK_PORT', 'MODEL_DOCK_HOME', 'MODEL_DOCK_CODEX_QUEUE_WAIT_MS',
+  'MODEL_DOCK_MFLUX_PORT', 'MODEL_DOCK_MFLUX_RUNTIME_DIR', 'MODEL_DOCK_MFLUX_PYTHON',
+  'MODEL_DOCK_TTS_PORT', 'MODEL_DOCK_ASR_PORT', 'MODEL_DOCK_TTS_MODEL',
+  'MODEL_DOCK_MLX_AUDIO_RUNTIME_DIR', 'MODEL_DOCK_MLX_AUDIO_PYTHON',
+  'MODEL_DOCK_TTS_MOSS_WORKERS', 'MODEL_DOCK_TTS_MOSS_QUEUE', 'MODEL_DOCK_TTS_MOSS_IDLE_SECONDS',
+  'CODEX_CLI_PATH', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'
+];
+
+export async function loadGatewayEnvironment(env = process.env) {
+  const directory = env.MODEL_DOCK_CONFIG_DIR || configRoot;
+  const defaults = Object.create(null);
+  for (const name of ['.env', '.env.local']) {
+    const file = directory instanceof URL ? new URL(name, directory) : path.join(directory, name);
+    try { Object.assign(defaults, parseEnv(await fs.readFile(file, 'utf8'))); }
+    catch (error) { if (error.code !== 'ENOENT') throw new Error(`Cannot load Model Dock ${name}.`, { cause: error }); }
+  }
+  for (const name of fileSettings) if (env[name] === undefined && defaults[name] !== undefined) env[name] = defaults[name];
+  return env;
+}
 
 export function dataDirectory() {
   return process.env.MODEL_DOCK_HOME || path.join(os.homedir(), '.model-dock');
@@ -51,9 +74,18 @@ function openConsole(url) {
 export async function main(args = process.argv.slice(2)) {
   const command = args[0] || 'serve';
   if (['--help', '-h', 'help'].includes(command)) {
-    console.log(`Model Dock ${VERSION}\n\nmodel-dock serve [--port 4317] [--no-open]\nmodel-dock open [--port 4317] [--print]\nmodel-dock token\n\nStarting the server automatically opens and signs in to the console.\nUse --no-open to run without opening a browser.\nMODEL_DOCK_HOME chooses the private data directory.\nInference: /v1/models, /v1/chat/completions, /v1/images/generations\nThe server listens on 127.0.0.1 only.`); return;
+    console.log(`Model Dock ${VERSION}\n\nmodel-dock serve [--port 4317] [--no-open]\nmodel-dock open [--port 4317] [--print]\nmodel-dock token\nmodel-dock mflux <setup|preload|start|stop|restart|health>\nmodel-dock tts <setup|preload|start|stop|restart|health>\nmodel-dock asr <setup|preload|start|stop|restart|health>\n\nStarting the server automatically opens and signs in to the console.\nUse --no-open to run without opening a browser.\nMODEL_DOCK_HOME chooses the private data directory.\nInference: /v1/models, /v1/chat/completions, /v1/images/generations\nThe server listens on 127.0.0.1 only.`); return;
   }
   if (['--version', '-v'].includes(command)) { console.log(VERSION); return; }
+  await loadGatewayEnvironment();
+  if (command === 'mflux') {
+    const { runMfluxCommand } = await import('../../runtimes/mflux/cli.mjs');
+    return runMfluxCommand(args.slice(1), dataDirectory());
+  }
+  if (command === 'tts' || command === 'asr') {
+    const { runAudioCommand } = await import('../../runtimes/mlx-audio/cli.mjs');
+    return runAudioCommand(command, args.slice(1), dataDirectory());
+  }
   if (command === 'token' && args.length === 1) {
     try { process.stdout.write(await fs.readFile(path.join(dataDirectory(), 'admin.token'), 'utf8')); }
     catch { throw new Error('Start Model Dock first to create a local administrator token.'); }

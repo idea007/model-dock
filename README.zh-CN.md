@@ -188,7 +188,43 @@ Codex 内置认证的适用范围与托管服务不同。商业/托管场景需�
 MODEL_DOCK_PORT=4320 MODEL_DOCK_HOME=/path/to/private/data npm start
 ```
 
-PowerShell 可使用 `$env:MODEL_DOCK_PORT='4320'` 设置变量。`.env.example` 仅说明配置项；应用不会隐式读取 `.env`。
+从 `.env.example` 和 `.env.local.example` 复制出 `.env` 和 `.env.local`，可为网关配置默认端口和本机覆盖项。进程环境优先，其次是 `.env.local`，最后是 `.env`。网关从 Model Dock 安装或源码目录读取文件，可用 `MODEL_DOCK_CONFIG_DIR` 指定其他目录。供应商密钥和本机服务令牌在「连接与凭证」中保存，项目通过网关地址和自己的项目密钥接入。
+
+PowerShell 可使用 `$env:MODEL_DOCK_PORT='4320'` 设置进程变量。
+
+## 管理本机 MFLUX
+
+在 Apple Silicon macOS 上准备 Python 环境和所需模型。
+
+```sh
+npm run mflux -- setup
+npm run mflux -- preload --model flux2-klein-4b
+npm run mflux -- preload --model z-image-turbo
+npm run mflux -- start
+npm run mflux -- health
+```
+
+用 `npm run mflux -- stop` 或 `npm run mflux -- restart` 控制用户级 LaunchAgent。安装发行包后可使用 `model-dock mflux`。运行时默认监听本机 `8016` 端口，在当前 macOS 登录会话中独立于网关运行，启动时离线读取现有权重。
+
+在「连接与凭证」登记 `http://127.0.0.1:8016/v1`，使用 Model Dock 私有数据目录下 `runtimes/mflux/service-token` 中的服务令牌。发布发现的模型后将其授权给对应项目。迁移已有环境时，可以通过 `MODEL_DOCK_MFLUX_RUNTIME_DIR` 指定已准备的运行目录，也可以在停止旧进程后把该目录迁入 Model Dock 数据目录的 `runtimes/mflux`。沿用现有连接时应随数据保留原服务令牌。
+
+## 管理本机配音和语音转写
+
+在 Apple Silicon macOS 上准备共享的 MLX Audio Python 环境并缓存 Kokoro 与 Whisper。使用 Python 3.12，将视频转写、配音对齐和参考音频处理所需的 FFmpeg 加入命令搜索路径。
+
+```sh
+npm run tts -- setup
+npm run tts -- preload
+npm run asr -- preload
+npm run tts -- start
+npm run asr -- start
+npm run tts -- health
+npm run asr -- health
+```
+
+两个命令都支持 `stop` 和 `restart`。安装发行包后使用 `model-dock tts` 和 `model-dock asr`。两个用户级 LaunchAgent 在当前 macOS 登录会话内离线运行，共用 Model Dock 私有数据目录中的 `runtimes/mlx-audio`。可用 `MODEL_DOCK_MLX_AUDIO_RUNTIME_DIR` 指定已准备的目录。Whisper 权重也用于可选的配音对齐。
+
+在「连接与凭证」登记配音 `http://127.0.0.1:7720/v1` 与转写 `http://127.0.0.1:7732/v1`，发布 `speech` 与 `transcription` 部署后在「项目访问」授权。已经使用这些端口的部署可沿用原 ID 和授权。配音参考模型可用 `tts preload --model` 缓存，支持 `mlx-community/MOSS-TTS-Nano-100M` 及 Qwen3-TTS Base 的 0.6B、1.7B 8 位版本。
 
 ## 开发与打包
 

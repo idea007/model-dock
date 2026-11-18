@@ -11,13 +11,23 @@ let app, demo;
 try {
   const packed = await run(process.execPath, [npm, 'pack', '--json', '--pack-destination', temporary], { cwd: process.cwd(), maxBuffer: 4 * 1024 * 1024 });
   const [manifest] = JSON.parse(packed.stdout);
-  for (const file of manifest.files) if (/node_modules|\.env(?:\.|$)|admin\.token|access\.token|master\.key|state\.json|client\.json|(?:client|server)\.lock|(^|\/)tests\//.test(file.path)) throw new Error(`Private/development file in package: ${file.path}`);
+  const envTemplates = ['.env.example', '.env.local.example'];
+  for (const file of manifest.files) if (!envTemplates.includes(file.path) && /node_modules|\.env(?:\.|$)|admin\.token|access\.token|master\.key|state\.json|client\.json|(?:client|server)\.lock|(^|\/)tests\//.test(file.path)) throw new Error(`Private/development file in package: ${file.path}`);
   if (manifest.files.some(file => file.path === 'apps/demo/mock.mjs')) throw new Error('Simulated providers must remain in tests.');
   const archive = path.join(temporary, manifest.filename);
   await run(process.execPath, [npm, 'install', '--prefix', temporary, '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', archive], { maxBuffer: 4 * 1024 * 1024 });
   const installed = path.join(temporary, 'node_modules', 'lab-model-dock');
   const help = await run(process.execPath, [path.join(installed, 'apps/gateway/cli.mjs'), '--help'], { cwd: temporary });
   if (!help.stdout.includes('Model Dock')) throw new Error('Installed CLI failed.');
+  for (const command of ['mflux', 'tts', 'asr']) {
+    const runtimeHelp = await run(process.execPath, [path.join(installed, 'apps/gateway/cli.mjs'), command, '--help'], { cwd: temporary });
+    if (!runtimeHelp.stdout.includes('start|stop|restart|health')) throw new Error(`Installed ${command} commands are missing.`);
+  }
+  for (const file of ['launch-agent.mjs', 'mflux/server.py', 'mflux/worker.py', 'mflux/models.json', 'mflux/requirements.txt',
+    'mlx-audio/mlx-server.py', 'mlx-audio/transcription-server.py', 'mlx-audio/requirements.txt', 'mlx-audio/private_output.py',
+    'mlx-audio/moss_pool.py', 'mlx-audio/moss_worker.py', 'mlx-audio/qwen_reference.py', 'mlx-audio/word_timing.py']) {
+    await fs.access(path.join(installed, 'runtimes', file));
+  }
   const { startGateway } = await import(pathToFileURL(path.join(installed, 'apps/gateway/server.mjs')));
   app = await startGateway({ directory: path.join(temporary, 'data'), port: 0, providers: { openai: {
     async *generate() { yield { type: 'delta', delta: { content: 'Package smoke response' } }; yield { type: 'done', finishReason: 'stop' }; }
@@ -29,6 +39,7 @@ try {
     await response.arrayBuffer();
   }
   const specification = await fs.readFile(path.join(installed, 'docs/openapi.json'), 'utf8');
+  for (const template of envTemplates) await fs.access(path.join(installed, template));
   const demoHelp = await run(process.execPath, [path.join(installed, 'apps/demo/cli.mjs'), '--help'], { cwd: temporary });
   if (!demoHelp.stdout.includes('client app') || demoHelp.stdout.includes('--mock')) throw new Error('Installed demo CLI failed.');
   const { startDemo } = await import(pathToFileURL(path.join(installed, 'apps/demo/server.mjs')));

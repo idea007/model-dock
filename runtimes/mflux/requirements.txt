@@ -1,0 +1,4 @@
+mflux==0.19.1
+mlx==0.32.2
+fastapi==0.135.1
+uvicorn==0.41.0

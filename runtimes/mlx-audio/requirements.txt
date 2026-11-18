@@ -1,0 +1,7 @@
+mlx-audio[server,stt,tts]==0.4.6
+fastapi>=0.95.0
+python-multipart>=0.0.22
+setuptools<81
+uvicorn>=0.22.0
+webrtcvad-wheels==2.0.14
+misaki[zh]

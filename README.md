@@ -188,7 +188,43 @@ Back up the entire data directory together. The encryption key and data reside o
 MODEL_DOCK_PORT=4320 MODEL_DOCK_HOME=/path/to/private/data npm start
 ```
 
-In PowerShell, set variables with syntax such as `$env:MODEL_DOCK_PORT='4320'`. `.env.example` documents the available settings; the application does not load `.env` implicitly.
+Copy `.env.example` and `.env.local.example` to `.env` and `.env.local` for gateway defaults and machine-specific overrides. In descending priority, the gateway reads the process environment, `.env.local`, and `.env`. Files are resolved in the Model Dock installation or source directory. Set `MODEL_DOCK_CONFIG_DIR` to select another directory. Save provider keys and service tokens in Connections & credentials. Projects use the gateway address and their own project key.
+
+In PowerShell, set process variables with syntax such as `$env:MODEL_DOCK_PORT='4320'`.
+
+## Manage local MFLUX
+
+On Apple Silicon macOS, prepare the Python environment and the models you want to serve.
+
+```sh
+npm run mflux -- setup
+npm run mflux -- preload --model flux2-klein-4b
+npm run mflux -- preload --model z-image-turbo
+npm run mflux -- start
+npm run mflux -- health
+```
+
+Use `npm run mflux -- stop` or `npm run mflux -- restart` to control the user LaunchAgent. With an installed package, replace `npm run mflux --` with `model-dock mflux`. The runtime listens on loopback port `8016` by default and runs independently of the gateway within the current macOS login. Startup uses the existing weights in offline mode.
+
+In Connections & credentials, register an MFLUX connection at `http://127.0.0.1:8016/v1` using the token from the private `runtimes/mflux/service-token` file inside the Model Dock data directory. Publish the discovered models and grant them to the appropriate project. For an existing installation, reuse its prepared runtime directory via `MODEL_DOCK_MFLUX_RUNTIME_DIR` or move that directory to `runtimes/mflux` under the Model Dock data directory after stopping the old process. Keep the original service token with the data if retaining the existing connection.
+
+## Manage local speech and transcription
+
+On Apple Silicon macOS, prepare the shared MLX Audio Python environment and cache Kokoro and Whisper. Use Python 3.12 and make FFmpeg available on the command path for video transcription, speech alignment, and reference audio.
+
+```sh
+npm run tts -- setup
+npm run tts -- preload
+npm run asr -- preload
+npm run tts -- start
+npm run asr -- start
+npm run tts -- health
+npm run asr -- health
+```
+
+Each command also supports `stop` and `restart`. The installed CLI uses `model-dock tts` and `model-dock asr`. Both user LaunchAgents start offline in the current macOS login and use the shared `runtimes/mlx-audio` directory under the private Model Dock data directory. Set `MODEL_DOCK_MLX_AUDIO_RUNTIME_DIR` to reuse a prepared directory. Whisper also supplies optional speech alignment.
+
+Register the `speech` upstream at `http://127.0.0.1:7720/v1` and the `transcription` upstream at `http://127.0.0.1:7732/v1`, then publish and authorize the deployments in Project access. Existing deployments on these ports can keep their IDs and grants. For reference speech, TTS preload accepts `--model mlx-community/MOSS-TTS-Nano-100M` and the supported 0.6B or 1.7B Qwen3-TTS Base 8-bit model names.
 
 ## Development and packaging
 
