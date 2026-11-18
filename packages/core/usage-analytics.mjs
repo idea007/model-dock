@@ -58,9 +58,10 @@ function callRecord(row) {
     source: audit.source || (['codex', 'mflux', 'ollama'].includes(row.provider) ? 'local' : 'unknown') };
 }
 
-async function* allUsageCalls(ledger, signal) {
+async function* allUsageCalls(ledger, signal, project) {
   const meteredVideo = new Set();
   for await (const row of ledger.rows(retentionDays, signal)) {
+    if (project && row.principalId !== project) continue;
     const call = callRecord(row);
     if (!call) { ledger.writeFailed = true; continue; }
     if (call.audit?.mediaTask) {
@@ -72,6 +73,63 @@ async function* allUsageCalls(ledger, signal) {
     }
     yield call;
   }
+}
+
+const receiptMetrics = ['inputTokens', 'outputTokens', 'totalTokens', 'cachedTokens', 'cacheWriteTokens',
+  'reasoningTokens', 'images', 'videos', 'mediaSeconds', 'inputCharacters'];
+
+function projectReceipt(call, recordedAt, billed) {
+  const audit = call.audit || {};
+  const metrics = { inputTokens: call.usage?.prompt_tokens, outputTokens: call.usage?.completion_tokens,
+    totalTokens: call.usage?.total_tokens, images: call.images || undefined, ...audit.metrics };
+  const estimate = audit.listEstimate || call.estimate;
+  return {
+    id: call.id, recordedAt, startedAt: call.startedAt, finishedAt: call.finishedAt,
+    operationId: call.operationId || null, clientCallId: call.clientCallId || null,
+    endpoint: call.endpoint, method: call.method || null, feature: call.feature, kind: call.kind, attempt: audit.attempt || 1,
+    provider: call.provider, deploymentId: call.modelId, model: call.nativeModel, credential: call.credential,
+    status: call.status, durationMs: call.durationMs, firstResponseMs: audit.firstResponseMs ?? null,
+    httpStatus: audit.httpStatus ?? null, errorCode: call.errorCode || null,
+    providerRequestId: audit.providerRequestId || null, providerTaskId: audit.providerTaskId || null,
+    taskStatus: audit.taskStatus || null, costCategory: usageCostCategory(call),
+    metrics: Object.fromEntries(receiptMetrics.filter(key => Number.isFinite(metrics[key]) && metrics[key] >= 0)
+      .map(key => [key, metrics[key]])),
+    estimate: estimate ? { currency: estimate.currency, minimum: estimate.minimum ?? estimate.amount,
+      maximum: estimate.maximum ?? estimate.amount, basis: estimate.basis || 'configured', version: estimate.version || null } : null,
+    billed: billed ? { currency: billed.currency, amount: billed.amount, status: billed.status } : null
+  };
+}
+
+const compareReceipts = (left, right) => left.recordedAt - right.recordedAt || left.id.localeCompare(right.id);
+
+export async function projectUsage(ledger, principal, parameters, signal, reconciliation = {}) {
+  const since = Number(parameters.get('since') ?? 0);
+  const before = Number(parameters.get('before') ?? Date.now());
+  const limit = Number(parameters.get('limit') ?? 100);
+  const after = parameters.get('after') || '';
+  const model = parameters.get('model') || '';
+  const linked = parameters.get('linked') === '1';
+  if ([...parameters.keys()].some(key => !['since', 'before', 'limit', 'after', 'model', 'linked'].includes(key) || parameters.getAll(key).length !== 1) ||
+    !Number.isSafeInteger(since) || since < 0 || !Number.isSafeInteger(before) || before <= since ||
+    !Number.isSafeInteger(limit) || limit < 1 || limit > 250 || after && !/^(?:chatcmpl|resp|img)_[a-f0-9]{16}$/.test(after)) {
+    throw new GatewayError('Invalid project usage query.', 400, 'invalid_usage_query');
+  }
+  const summary = emptyUsage(), page = [];
+  let remaining = 0;
+  for await (const call of allUsageCalls(ledger, signal, principal.id)) {
+    const recordedAt = Math.max(call.recordedAt ?? Date.parse(call.finishedAt), Date.parse(reconciliation[call.id]?.createdAt) || 0);
+    if (recordedAt < since || recordedAt >= before || model && model !== call.modelId || linked && !call.clientCallId) continue;
+    tally(summary, call);
+    if (recordedAt === since && after && call.id.localeCompare(after) <= 0) continue;
+    remaining++;
+    page.push({ id: call.id, recordedAt, call });
+    if (page.length >= limit * 2) page.sort(compareReceipts).splice(limit);
+  }
+  const data = page.sort(compareReceipts).slice(0, limit)
+    .map(({ call, recordedAt }) => projectReceipt(call, recordedAt, reconciliation[call.id]));
+  const last = data.at(-1);
+  return { data, summary, before, retentionDays, writeFailed: ledger.writeFailed,
+    next: remaining > limit ? { since: last.recordedAt, after: last.id, before } : null };
 }
 
 function inPeriod(call, query) {

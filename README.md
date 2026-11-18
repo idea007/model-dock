@@ -139,7 +139,7 @@ Use a published model that supports tools and grant it to your project key. Star
 | Ollama | Native local HTTP API | Installed-model discovery, capability and context metadata, text inference, streaming, JSON, and model-supported tool calls |
 | Codex (experimental) | Locally installed and signed-in CLI / App Server | Model catalog, text and tool calls, image generation and reference-based editing |
 
-Install and start Ollama separately, then download a model with a command such as `ollama pull <model>`. Model Dock does not download weights at startup or during status checks. Context metadata is displayed for reference; inference does not automatically raise `num_ctx` to the model's maximum.
+Install Ollama and prepare the model store, for example with `ollama pull <model>` against an Ollama instance. Model Dock can connect to an existing instance or [manage a dedicated Ollama embedding process](#manage-ollama-for-embeddings) on macOS. Model weights are prepared before registration. Context metadata is displayed for reference. Inference uses the configured context length.
 
 Codex uses native JSON-RPC and creates a temporary thread for each request. Shell, browser, plugin, and host MCP capabilities are isolated. Application tool calls are returned to the caller for execution; the gateway does not execute them on the app's behalf. This is a real model bridge using the account or upstream configured in Codex and its associated quota. `model/list` is only a catalog and does not establish that the current account can run a particular model.
 
@@ -225,6 +225,51 @@ npm run asr -- health
 Each command also supports `stop` and `restart`. The installed CLI uses `model-dock tts` and `model-dock asr`. Both user LaunchAgents start offline in the current macOS login and use the shared `runtimes/mlx-audio` directory under the private Model Dock data directory. Set `MODEL_DOCK_MLX_AUDIO_RUNTIME_DIR` to reuse a prepared directory. Whisper also supplies optional speech alignment.
 
 Register the `speech` upstream at `http://127.0.0.1:7720/v1` and the `transcription` upstream at `http://127.0.0.1:7732/v1`, then publish and authorize the deployments in Project access. Existing deployments on these ports can keep their IDs and grants. For reference speech, TTS preload accepts `--model mlx-community/MOSS-TTS-Nano-100M` and the supported 0.6B or 1.7B Qwen3-TTS Base 8-bit model names.
+
+## Manage Edge TTS and LTX
+
+```sh
+npm run edge -- setup
+npm run edge -- start
+npm run edge -- health
+
+npm run ltx -- register --python /absolute/venv/bin/python --models-root /absolute/models
+npm run ltx -- start
+npm run ltx -- health
+```
+
+Both runtimes support `stop` and `restart`. The installed CLI uses `model-dock edge` and `model-dock ltx`. Each service runs as a user LaunchAgent with its code in the private Model Dock data directory. Set `MODEL_DOCK_EDGE_PROXY` in the local environment if Edge TTS needs an upstream WebSocket proxy. `health` checks the installed worker. A short synthesis call verifies upstream speech and word timings.
+
+LTX requires Apple Silicon, FFmpeg, a prepared Python environment and local weights. Registration checks the pinned packages and source revision in `runtimes/ltx/models.json`. It defaults to `ltx-2.5-fast-q4`. Repeat `--model` to register several prepared models. Dependency installation and weight preparation are separate from startup and inference.
+
+Register `edge-tts` at `http://127.0.0.1:8018/v1` and `local-ltx` at `http://127.0.0.1:7930/v1` in Connections & credentials. Use the `service-token` files under the private `runtimes/edge` and `runtimes/ltx` directories. Publish and grant project access. LTX keeps operation IDs and outputs in the same `jobs` directory across restarts. When adopting an existing LTX installation, pause submissions, wait for pending tasks to settle and preserve their receipts and results before switching. Keep the original connection and upstream origin for existing standard `/v1/videos` resources. After changing an upstream address, rediscover and re-enable the deployment before checking project access.
+
+## Manage Greyscope text detection
+
+```sh
+npm run greyscope -- setup
+npm run greyscope -- start
+npm run greyscope -- health
+```
+
+The installed CLI uses `model-dock greyscope`. Setup uses `uv` and verifies the weights for `greyscope-v2-mlx-q4` against the pinned manifest. You can use `setup --source` with an existing directory of verified weights. The Apple Silicon runtime starts offline and warms the model before listening. Use `stop` or `restart` to control the user LaunchAgent.
+
+Register the `greyscope` profile at `http://127.0.0.1:7746/v1` with the credential from the private `runtimes/greyscope/service-token` file. Publish it and grant project access. Authorized clients can check `GET /v1/services/<encoded-deployment-id>/health` or send `{ "engine": "greyscope-v2-mlx-q4", "text": "Draft text" }` to `POST /v1/services/<encoded-deployment-id>/detect`. The gateway keeps call metadata. The consuming app owns the draft and the saved report.
+
+## Manage Ollama for embeddings
+
+Use an installed Ollama executable and a prepared local model store. When a desktop Ollama instance also runs, give the managed instance its own store. To reuse an installed model, copy its tag manifest and referenced blobs. For the digest, use the local tag manifest's SHA-256 in the prepared store, which the offline instance reports in `/api/tags`. The native dimension is the model's `embedding_length` in `/api/show`.
+
+```sh
+npm run ollama -- register --executable "$OLLAMA_EXECUTABLE" --models-root "$OLLAMA_MODEL_STORE" \
+  --model qwen3-embedding:0.6b --digest "$MODEL_DIGEST" --dimensions 1024
+npm run ollama -- start
+npm run ollama -- health
+```
+
+The installed CLI uses `model-dock ollama` with the same commands. Use `stop` and `restart` to control the macOS user LaunchAgent. Its offline Ollama process listens on `127.0.0.1:7734`. Health checks confirm that the managed process owns the listener and serves the registered model and native dimension.
+
+Register the `embedding` profile at `http://127.0.0.1:7734/v1` with `qwen3-embedding:0.6b` as its upstream model. When migrating an existing deployment, edit the upstream address on its existing connection, rediscover the service, and re-enable the deployment. Preserve the application's embedding model, dimension setting, and endpoint identity so it can reuse the index. Compare a real query against the existing vectors after switching.
 
 ## Development and packaging
 

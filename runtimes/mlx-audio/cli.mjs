@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { managedJob, startLaunchAgent, stopLaunchAgent } from '../launch-agent.mjs';
+import { managedJob, stageSources, startLaunchAgent, stopLaunchAgent } from '../launch-agent.mjs';
 
 const whisperModel = 'mlx-community/whisper-base-asr-fp16';
 const kokoroModels = ['8bit', '4bit', 'bf16'].map(variant => 'mlx-community/Kokoro-82M-' + variant);
@@ -18,27 +18,6 @@ const serviceConfigs = {
   tts: { name: 'TTS', port: 7720, script: 'mlx-server.py', models: ttsPreloads },
   asr: { name: 'ASR', port: 7732, script: 'transcription-server.py', models: new Map([[whisperModel, [whisperModel]]]) }
 };
-
-function stageSources(root) {
-  const files = readdirSync(import.meta.dirname).filter(name => name.endsWith('.py')).sort();
-  const sources = files.map(name => [name, readFileSync(path.join(import.meta.dirname, name))]);
-  const hash = createHash('sha256');
-  for (const [name, source] of sources) hash.update(name).update('\0').update(source).update('\0');
-  // launchd jobs can be denied access to a checkout under macOS Documents.
-  const directory = path.join(root, 'code');
-  const revision = path.join(directory, hash.digest('hex'));
-  if (existsSync(revision)) return revision;
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const staging = mkdtempSync(path.join(directory, '.setup-'));
-  try {
-    for (const [name, source] of sources) writeFileSync(path.join(staging, name), source, { mode: 0o600 });
-    try { renameSync(staging, revision); }
-    catch (error) { if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) throw error; }
-  } finally {
-    rmSync(staging, { recursive: true, force: true });
-  }
-  return revision;
-}
 
 export function audioSettings(service, directory, env = process.env) {
   const config = serviceConfigs[service];
@@ -126,7 +105,8 @@ export async function runAudioCommand(service, args, directory, env = process.en
   } else {
     if (!existsSync(settings.python)) throw new Error('Run model-dock ' + service + ' setup first.');
     if (command === 'preload') return preload(settings, model || settings.model, env);
-    const source = stageSources(settings.root);
+    const files = readdirSync(import.meta.dirname).filter(name => name.endsWith('.py')).sort();
+    const source = stageSources(settings.root, import.meta.dirname, files);
     if (command === 'restart') await stopLaunchAgent(settings);
     const launchEnvironment = {
       PATH: env.PATH || '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',

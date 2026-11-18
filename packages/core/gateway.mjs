@@ -11,9 +11,10 @@ import { CodexRequestQueue, connectionBusy } from './codex-request-queue.mjs';
 import { CodexImageOperations } from './codex-image-operations.mjs';
 import { CodexSessions, validateCodexSession, scopeCodexSession } from './codex-sessions.mjs';
 import { ServiceOwnership } from './service-ownership.mjs';
-import { serviceJobId, serviceProfiles, serviceRequest, standardUpstreamModelProfiles } from '../providers/services.mjs';
+import { serviceJobId, serviceProfiles, serviceRequest, standardUpstreamModelProfiles, validateServiceBaseUrl } from '../providers/services.mjs';
 import { jsonResponse } from '../providers/http.mjs';
 import { apiCredentialName, isApiConnection, providerUrl, validateApiKey, validateMfluxToken } from './api-credentials.mjs';
+import { projectCatalog, validServiceModelId } from './project-catalog.mjs';
 
 const missing = kind => { throw new GatewayError(`${kind} not found.`, 404, 'not_found'); };
 const originChanged = () => new GatewayError('Enter a new API key or remove the saved key before changing the provider origin.', 400, 'credential_origin_changed', 'apiKey');
@@ -42,7 +43,7 @@ function normalizeKeyModels(state, models) {
   return [...new Set(models)];
 }
 export function normalizeConnection(input, previous) {
-  exact(input, ['revision', 'name', 'type', 'baseUrl', 'apiKey', 'enabled', 'maxConcurrency', 'timeoutSeconds', 'service', 'credentialId', 'upstreamModel']);
+  exact(input, ['revision', 'name', 'type', 'baseUrl', 'apiKey', 'enabled', 'maxConcurrency', 'timeoutSeconds', 'service', 'credentialId', 'upstreamModel', 'serviceModels']);
   const type = previous?.type || input.type;
   if (!['openai', 'ollama', 'codex', 'mflux', 'service'].includes(type) || previous && input.type !== undefined && input.type !== previous.type) throw new GatewayError('Invalid provider type.');
   const concurrencyLimit = type === 'codex' ? 1 : type === 'mflux' ? 4 : 16;
@@ -58,6 +59,13 @@ export function normalizeConnection(input, previous) {
     connection.service = profile;
   } else if (input.service !== undefined) {
     throw new GatewayError('The service profile is only allowed on service connections.');
+  }
+  if (input.serviceModels !== undefined) {
+    if (type !== 'service' || !Array.isArray(input.serviceModels) || input.serviceModels.length > 100 ||
+      !input.serviceModels.every(validServiceModelId) || new Set(input.serviceModels).size !== input.serviceModels.length) {
+      throw new GatewayError('Enter up to 100 distinct native model IDs for this provider service.', 400, 'invalid_request', 'serviceModels');
+    }
+    connection.serviceModels = input.serviceModels;
   }
   if (input.upstreamModel !== undefined) {
     if (!standardUpstreamModelProfiles.has(connection.service)) {
@@ -80,6 +88,7 @@ export function normalizeConnection(input, previous) {
       throw new GatewayError('Use the MFLUX loopback HTTP address with an explicit port and /v1.');
     }
     connection.baseUrl = url.toString().replace(/\/+$/, '');
+    if (type === 'service') validateServiceBaseUrl(connection.service, connection.baseUrl);
   }
   if (input.apiKey !== undefined) validateApiKey(input.apiKey);
   return connection;
@@ -164,6 +173,10 @@ export class Gateway {
       return model && model.revision === item.model_revision && model.maxReferenceImages === item.max_reference_images
         && item.image_sizes.length === model.imageSizes.length && item.image_sizes.every(size => model.imageSizes.includes(size));
     }) };
+  }
+  async projectCatalog(principal, signal) {
+    const { data } = await this.availableCatalog(principal, signal);
+    return { data: projectCatalog(data, this.store.read()) };
   }
   snapshot() {
     const state = this.store.read();
@@ -596,10 +609,12 @@ export class Gateway {
     const { signal, id, endpoint } = context;
     signal.throwIfAborted();
     const controller = new AbortController(), started = Date.now();
-    const linkedOperation = context.operationId || context.usageTags?.operationId;
+    const linkedOperation = context.usageTags?.operationId || context.operationId;
     const metadata = { id, model: name, modelId: model.id, modelName: model.name, nativeModel: model.nativeId, endpoint,
       connectionId: connection.id, connectionName: connection.name, provider: connection.type,
       ...(linkedOperation && { operationId: linkedOperation }),
+      ...(context.usageTags?.callId && { clientCallId: context.usageTags.callId }),
+      ...(context.serviceRequest && { method: context.serviceRequest.method }),
       principalId: principal.id, projectName: principal.name, startedAt: new Date(started).toISOString() };
     const trace = new ProviderUsageTrace({ connection, model, credential: connection.usageCredential,
       endpoint: context.serviceRequest ? serviceUsageEndpoint(connection, context.serviceRequest.pathname, context.serviceRequest.method) : endpoint,

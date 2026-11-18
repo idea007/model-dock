@@ -10,7 +10,7 @@ const chat = route('POST', '/chat/completions');
 const parts = [
   ['deepseek', [models, route('GET', '/user/balance'), chat]],
   ['deepseek-search', [route('POST', '/tools/search')]],
-  ['minimax-chat', [models, chat]],
+  ['minimax-chat', [models, chat, route('POST', '/responses')]],
   ['seedream', [models, route('POST', '/images/generations', { image: true })]],
   ['minimax-image', [minimaxModels, route('POST', '/v1/image_generation', { image: true })]],
   ['seedance', [
@@ -50,6 +50,7 @@ const parts = [
   ]],
   ['transcription', [models, health, route('POST', '/audio/transcriptions')]],
   ['edge-tts', [health, route('POST', '/audio/speech-with-timestamps')]],
+  ['greyscope', [health, route('POST', '/detect')]],
   ['embedding', [models, route('POST', '/embeddings')]]
 ];
 export const serviceProfiles = new Map(parts);
@@ -62,6 +63,12 @@ export const serviceJobId = value => {
   const id = typeof value === 'number' && Number.isSafeInteger(value) ? String(value) : value;
   return typeof id === 'string' && /^[A-Za-z0-9_.:-]{1,160}$/.test(id) ? id : '';
 };
+
+export function validateServiceBaseUrl(profile, baseUrl) {
+  if (profile === 'greyscope' && !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}\/v1$/.test(baseUrl)) {
+    throw new GatewayError('Use the Greyscope loopback HTTP address with an explicit port and /v1.', 400, 'invalid_request', 'baseUrl');
+  }
+}
 
 export const serviceProvider = {
   discover(connection) {
@@ -76,6 +83,7 @@ export function serviceRequest(connection, method, pathname, search, incoming, b
   if (!operation || pathname.split('/').some(part => part === '.' || part === '..')) {
     throw new GatewayError('This provider operation is unavailable.', 404, 'service_operation_unavailable');
   }
+  validateServiceBaseUrl(connection.service, connection.baseUrl);
   const params = new URLSearchParams(search);
   for (const [key, value] of params) {
     if (!operation.query?.includes(key) || params.getAll(key).length !== 1 || !/^[a-zA-Z0-9_.:/-]{1,160}$/.test(value)) {

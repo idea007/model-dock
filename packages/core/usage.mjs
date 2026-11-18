@@ -117,7 +117,7 @@ export class UsageLedger {
       await this.#prepare();
       const filename = path.join(this.directory, `${localDay(row.finishedAt)}.jsonl`);
       // A newline separates the next entry from a partially written tail after a crash.
-      await fs.appendFile(filename, `\n${JSON.stringify(row)}\n`, { mode: 0o600, flush: true });
+      await fs.appendFile(filename, `\n${JSON.stringify({ ...row, recordedAt: Date.now() })}\n`, { mode: 0o600, flush: true });
     });
   }
 

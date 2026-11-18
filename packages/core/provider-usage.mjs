@@ -12,7 +12,8 @@ const validModel = value => typeof value === 'string' && value.length <= 200 && 
   && value.split('/').every(part => safeAuditId(part));
 
 export function usageTags(headers, token) {
-  const fields = { operationId: headers['x-model-dock-operation-id'], feature: headers['x-model-dock-feature'] };
+  const fields = { operationId: headers['x-model-dock-operation-id'], feature: headers['x-model-dock-feature'],
+    callId: headers['x-model-dock-call-id'] };
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined) continue;
     if (typeof value !== 'string' || !safeAuditId(value, [token]) || value.length > 160) {
@@ -121,7 +122,8 @@ export class ProviderUsageTrace {
     this.model = model.nativeId;
     this.metrics = {};
     this.request = {};
-    this.development = development && new DevelopmentCapture(development, directory);
+    // Draft text and detection results stay with the caller's report.
+    this.development = connection.service !== 'greyscope' && development ? new DevelopmentCapture(development, directory) : undefined;
   }
 
   start(input, secret) {

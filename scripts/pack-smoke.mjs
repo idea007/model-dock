@@ -19,11 +19,14 @@ try {
   const installed = path.join(temporary, 'node_modules', 'lab-model-dock');
   const help = await run(process.execPath, [path.join(installed, 'apps/gateway/cli.mjs'), '--help'], { cwd: temporary });
   if (!help.stdout.includes('Model Dock')) throw new Error('Installed CLI failed.');
-  for (const command of ['mflux', 'tts', 'asr']) {
+  for (const command of ['mflux', 'tts', 'asr', 'edge', 'ltx', 'greyscope', 'ollama']) {
     const runtimeHelp = await run(process.execPath, [path.join(installed, 'apps/gateway/cli.mjs'), command, '--help'], { cwd: temporary });
     if (!runtimeHelp.stdout.includes('start|stop|restart|health')) throw new Error(`Installed ${command} commands are missing.`);
   }
-  for (const file of ['launch-agent.mjs', 'mflux/server.py', 'mflux/worker.py', 'mflux/models.json', 'mflux/requirements.txt',
+  for (const file of ['launch-agent.mjs', 'service-settings.mjs', 'ollama/cli.mjs', 'edge/server.mjs', 'edge/speech.py', 'edge/requirements.txt',
+    'ltx/server.mjs', 'ltx/installation.mjs', 'ltx/models.json', 'ltx/worker.py', 'ltx/memory.py',
+    'greyscope/server.py', 'greyscope/engine.py', 'greyscope/text_processing.py', 'greyscope/greyscope-model.json', 'greyscope/requirements.txt',
+    'mflux/server.py', 'mflux/worker.py', 'mflux/models.json', 'mflux/requirements.txt',
     'mlx-audio/mlx-server.py', 'mlx-audio/transcription-server.py', 'mlx-audio/requirements.txt', 'mlx-audio/private_output.py',
     'mlx-audio/moss_pool.py', 'mlx-audio/moss_worker.py', 'mlx-audio/qwen_reference.py', 'mlx-audio/word_timing.py']) {
     await fs.access(path.join(installed, 'runtimes', file));

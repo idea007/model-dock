@@ -29,7 +29,7 @@ The standard speech, transcription, embeddings and video routes use the full Mod
 
 For native request shapes on Chat Completions, Images, Audio Speech, Audio Transcriptions and Embeddings, use `X-Model-Dock-Service: <deployment-id>` and keep the upstream model name in the body. Requests with this header forward the service payload, including SSE, multipart files and binary results. This passthrough accepts transcription requests up to 129 MiB including multipart framing.
 
-Provider-specific operations use `/v1/services/<encoded-deployment-id>/<provider-path>`. Percent-encode the slash in the deployment ID. Supported paths include DeepSeek search, cloud video submission, status and cancellation, local LTX receipts and result retrieval, and voice enrollment or timestamped speech. The gateway uses an allowlist per protocol and scopes task and file IDs to the project that created them. LTX submissions and reconciliation use the caller's original idempotency key. Plan cutovers after any active tasks created outside the gateway have finished.
+Provider-specific operations use `/v1/services/<encoded-deployment-id>/<provider-path>`. Percent-encode the slash in the deployment ID. Supported paths include DeepSeek search, MiniMax multimodal Responses, cloud video submission, status and cancellation, local LTX receipts and result retrieval, and voice enrollment or timestamped speech. The gateway uses an allowlist per protocol and scopes task and file IDs to the project that created them. LTX submissions and reconciliation use the caller's original idempotency key. Plan cutovers after any active tasks created outside the gateway have finished.
 
 ## Audio and embeddings
 
@@ -387,6 +387,21 @@ Record the gateway response header `x-request-id`. Include it, the HTTP status a
 | `504` | `request_timeout` | Check the configured connection deadline and provider state |
 
 The gateway submits the request once to the selected adapter. SDKs can retry on their own. For deliberate retries, use `maxRetries: 0` or `max_retries=0` and make the decision in the application. A disconnect or timeout can leave the execution outcome unknown. After a Codex cancellation, the slot stays occupied until the turn ends or the local App Server process stops.
+
+## Project catalog and usage
+
+Use a project key from the application's server. The key defines the scope of both read-only endpoints.
+
+| Endpoint | Response |
+| --- | --- |
+| `GET /v1/project/models` | `data` contains one row per native model and authorized deployment. Use `deployment_id` and `native_model` together as the model identity. Rows include the task, capabilities, supported reasoning levels, credential display name and ID, and last reported connection health. |
+| `GET /v1/project/usage` | `data` contains paginated gateway receipts. `summary` contains measured totals and cost estimates for the selected window. `next` is the pagination cursor, which includes an exclusive upper time bound. |
+
+For provider services, the model catalog uses the upstream model configured for the deployment or the models known to the service profile. An administrator can set `serviceModels` to a list of native model IDs when editing a service connection through the management API. Inference continues to use the service deployment ID as described above.
+
+Usage accepts `since` and `before` as Unix milliseconds, `model` as a deployment ID, and `limit` from 1 to 250. Pass the fields in `next` along with any existing filters to read the next page. `linked=1` selects calls with an application call ID. Store receipts by `id` before advancing the checkpoint. Fields omitted from `metrics` are unavailable. Call details are available for 30 days.
+
+For correlation, set `X-Model-Dock-Call-Id` to an opaque application call ID and `X-Model-Dock-Operation-Id` to the operation that owns it. The gateway returns `X-Model-Dock-Request-Id` during inference. A usage receipt exposes that gateway ID as `id` and the application call ID as `clientCallId`. Store user identity and feature configuration in the requesting application.
 
 ## Authorized model metadata
 

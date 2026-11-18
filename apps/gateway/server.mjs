@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Store, newId } from '../../packages/core/store.mjs';
 import { Gateway } from '../../packages/core/gateway.mjs';
 import { UsageLedger, usageQuery } from '../../packages/core/usage.mjs';
-import { findUsageCall, usageAnalytics, usageAnalyticsQuery, usageCallsCsv } from '../../packages/core/usage-analytics.mjs';
+import { findUsageCall, projectUsage, usageAnalytics, usageAnalyticsQuery, usageCallsCsv } from '../../packages/core/usage-analytics.mjs';
 import { usageTags } from '../../packages/core/provider-usage.mjs';
 import { UsageDevelopment } from '../../packages/core/usage-development.mjs';
 import { UsageBilling, usageStatementTemplate } from '../../packages/core/usage-billing.mjs';
@@ -187,6 +187,12 @@ export async function startGateway(options) {
       if (request.method === 'GET' && pathname === '/v1/project') {
         json(response, 200, { id: principal.id, name: principal.name }); return;
       }
+      if (request.method === 'GET' && ['/v1/project/models', '/v1/project/usage'].includes(pathname)) {
+        if (principal.admin) throw new GatewayError('A project access token is required.', 403, 'project_key_required');
+        const data = pathname.endsWith('/models') ? await gateway.projectCatalog(principal, controller.signal)
+          : await projectUsage(ledger, principal, url.searchParams, controller.signal, billing.latest());
+        json(response, 200, data); return;
+      }
       const providerService = pathname.match(/^\/v1\/services\/(conn_[a-f0-9]{16}%2[fF][a-z0-9-]+)(\/[^%]*)$/);
       const serviceHeader = request.headers['x-model-dock-service'];
       const mediaRoute = standardMediaRoute(request.method, pathname);
@@ -196,6 +202,7 @@ export async function startGateway(options) {
         const deployment = providerService ? decodeURIComponent(providerService[1]) : serviceHeader;
         const servicePath = providerService ? providerService[2] : pathname.slice(3);
         releaseProject = gateway.admitProjectRequest(principal);
+        response.setHeader('x-model-dock-request-id', id);
         execution = { id, endpoint: 'service', signal: controller.signal, ...auditContext() };
         const limit = servicePath === '/audio/transcriptions' ? maxTranscriptionRequestBytes : maxImageRequestBytes;
         const body = await readPayload(request, limit, bytes => { releaseBody = reserveBody(bytes); }, controller.signal);
@@ -209,6 +216,7 @@ export async function startGateway(options) {
           throw new GatewayError('Use the published model ID for this request.', 400, 'invalid_request', 'X-Model-Dock-Service');
         }
         releaseProject = gateway.admitProjectRequest(principal);
+        response.setHeader('x-model-dock-request-id', id);
         execution = { id, endpoint: 'service', signal: controller.signal, ...auditContext() };
         const read = (limit, multiplier = 1) => readPayload(request, limit, bytes => {
           releaseBody = reserveBody(bytes * multiplier);
@@ -236,6 +244,7 @@ export async function startGateway(options) {
       if (request.method === 'POST' && endpoint) {
         const requestId = endpoint === 'chat' ? id : newId(endpoint === 'responses' ? 'resp' : 'img');
         response.setHeader('x-request-id', requestId);
+        response.setHeader('x-model-dock-request-id', requestId);
         if (endpoint !== 'images') response.setHeader('location', `/v1/requests/${requestId}`);
         execution = { id: requestId, endpoint, signal: controller.signal, ...auditContext() };
         if (endpoint !== 'images') releaseProject = gateway.admitProjectRequest(principal);

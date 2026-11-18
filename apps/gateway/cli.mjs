@@ -17,6 +17,10 @@ const fileSettings = [
   'MODEL_DOCK_TTS_PORT', 'MODEL_DOCK_ASR_PORT', 'MODEL_DOCK_TTS_MODEL',
   'MODEL_DOCK_MLX_AUDIO_RUNTIME_DIR', 'MODEL_DOCK_MLX_AUDIO_PYTHON',
   'MODEL_DOCK_TTS_MOSS_WORKERS', 'MODEL_DOCK_TTS_MOSS_QUEUE', 'MODEL_DOCK_TTS_MOSS_IDLE_SECONDS',
+  'MODEL_DOCK_EDGE_PORT', 'MODEL_DOCK_EDGE_RUNTIME_DIR', 'MODEL_DOCK_EDGE_PYTHON', 'MODEL_DOCK_EDGE_PROXY',
+  'MODEL_DOCK_LTX_PORT', 'MODEL_DOCK_LTX_RUNTIME_DIR',
+  'MODEL_DOCK_GREYSCOPE_PORT', 'MODEL_DOCK_GREYSCOPE_RUNTIME_DIR',
+  'MODEL_DOCK_OLLAMA_PORT', 'MODEL_DOCK_OLLAMA_RUNTIME_DIR',
   'CODEX_CLI_PATH', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'
 ];
 
@@ -74,7 +78,7 @@ function openConsole(url) {
 export async function main(args = process.argv.slice(2)) {
   const command = args[0] || 'serve';
   if (['--help', '-h', 'help'].includes(command)) {
-    console.log(`Model Dock ${VERSION}\n\nmodel-dock serve [--port 4317] [--no-open]\nmodel-dock open [--port 4317] [--print]\nmodel-dock token\nmodel-dock mflux <setup|preload|start|stop|restart|health>\nmodel-dock tts <setup|preload|start|stop|restart|health>\nmodel-dock asr <setup|preload|start|stop|restart|health>\n\nStarting the server automatically opens and signs in to the console.\nUse --no-open to run without opening a browser.\nMODEL_DOCK_HOME chooses the private data directory.\nInference: /v1/models, /v1/chat/completions, /v1/images/generations\nThe server listens on 127.0.0.1 only.`); return;
+    console.log(`Model Dock ${VERSION}\n\nmodel-dock serve [--port 4317] [--no-open]\nmodel-dock open [--port 4317] [--print]\nmodel-dock token\nmodel-dock mflux <setup|preload|start|stop|restart|health>\nmodel-dock tts <setup|preload|start|stop|restart|health>\nmodel-dock asr <setup|preload|start|stop|restart|health>\nmodel-dock edge <setup|start|stop|restart|health>\nmodel-dock ltx <register|start|stop|restart|health>\nmodel-dock greyscope <setup|start|stop|restart|health>\nmodel-dock ollama <register|start|stop|restart|health>\n\nStarting the server automatically opens and signs in to the console.\nUse --no-open to run without opening a browser.\nMODEL_DOCK_HOME chooses the private data directory.\nInference: /v1/models, /v1/chat/completions, /v1/images/generations\nThe server listens on 127.0.0.1 only.`); return;
   }
   if (['--version', '-v'].includes(command)) { console.log(VERSION); return; }
   await loadGatewayEnvironment();
@@ -85,6 +89,22 @@ export async function main(args = process.argv.slice(2)) {
   if (command === 'tts' || command === 'asr') {
     const { runAudioCommand } = await import('../../runtimes/mlx-audio/cli.mjs');
     return runAudioCommand(command, args.slice(1), dataDirectory());
+  }
+  if (command === 'edge') {
+    const { runEdgeCommand } = await import('../../runtimes/edge/cli.mjs');
+    return runEdgeCommand(args.slice(1), dataDirectory());
+  }
+  if (command === 'ltx') {
+    const { runLtxCommand } = await import('../../runtimes/ltx/cli.mjs');
+    return runLtxCommand(args.slice(1), dataDirectory());
+  }
+  if (command === 'greyscope') {
+    const { runGreyscopeCommand } = await import('../../runtimes/greyscope/cli.mjs');
+    return runGreyscopeCommand(args.slice(1), dataDirectory());
+  }
+  if (command === 'ollama') {
+    const { runOllamaCommand } = await import('../../runtimes/ollama/cli.mjs');
+    return runOllamaCommand(args.slice(1), dataDirectory());
   }
   if (command === 'token' && args.length === 1) {
     try { process.stdout.write(await fs.readFile(path.join(dataDirectory(), 'admin.token'), 'utf8')); }

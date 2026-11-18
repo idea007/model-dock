@@ -139,7 +139,7 @@ console.log(refusal ?? content);
 | Ollama | 本机原生 HTTP API | 已安装模型发现、能力与上下文元数据、文本推理、流式、JSON、模型支持的工具调用 |
 | Codex（实验性） | 本机已安装并登录的 CLI / App Server | 模型目录、文本推理与工具调用、单张文生图 |
 
-Ollama 需另行安装、启动并下载模型，例如 `ollama pull <model>`。本项目不会在启动或检查状态时自动下载权重。上下文元数据用于展示，推理不会擅自把 `num_ctx` 调到模型最大值。
+先安装 Ollama 并准备模型，例如在已有 Ollama 实例上运行 `ollama pull <model>`。Model Dock 可以连接已有实例，也可以在 macOS 上[管理独立的 Ollama 向量进程](#管理-ollama-向量服务)。注册前准备权重，上下文元数据用于展示，推理按已配置的上下文长度运行。
 
 Codex 使用原生 JSON-RPC，按请求创建临时线程；Shell、浏览器、插件、宿主 MCP 等能力被隔离。应用工具调用会返回调用方执行，网关不会替应用执行工具。它是真实模型桥接，使用 Codex 配置的账号/上游及对应额度；`model/list` 只是目录，不能证明当前账号有某个模型的推理权限。
 
@@ -225,6 +225,51 @@ npm run asr -- health
 两个命令都支持 `stop` 和 `restart`。安装发行包后使用 `model-dock tts` 和 `model-dock asr`。两个用户级 LaunchAgent 在当前 macOS 登录会话内离线运行，共用 Model Dock 私有数据目录中的 `runtimes/mlx-audio`。可用 `MODEL_DOCK_MLX_AUDIO_RUNTIME_DIR` 指定已准备的目录。Whisper 权重也用于可选的配音对齐。
 
 在「连接与凭证」登记配音 `http://127.0.0.1:7720/v1` 与转写 `http://127.0.0.1:7732/v1`，发布 `speech` 与 `transcription` 部署后在「项目访问」授权。已经使用这些端口的部署可沿用原 ID 和授权。配音参考模型可用 `tts preload --model` 缓存，支持 `mlx-community/MOSS-TTS-Nano-100M` 及 Qwen3-TTS Base 的 0.6B、1.7B 8 位版本。
+
+## 管理 Edge TTS 与 LTX
+
+```sh
+npm run edge -- setup
+npm run edge -- start
+npm run edge -- health
+
+npm run ltx -- register --python /absolute/venv/bin/python --models-root /absolute/models
+npm run ltx -- start
+npm run ltx -- health
+```
+
+两个服务均支持 `stop` 和 `restart`。安装发行包后用 `model-dock edge` 和 `model-dock ltx`。各服务由独立的用户级 LaunchAgent 运行，启动代码保存在 Model Dock 私有数据目录。Edge TTS 需要 WebSocket 代理时，在本机配置中设置 `MODEL_DOCK_EDGE_PROXY`。`health` 检查本地 worker，短句合成可确认上游连接和逐词时间戳。
+
+LTX 需要 Apple Silicon、FFmpeg 和已经准备好的 Python 环境及权重。注册时校验 `runtimes/ltx/models.json` 中固定的依赖与源码版本。默认注册 `ltx-2.5-fast-q4`，可以重复指定 `--model` 注册多个已准备模型。依赖安装和权重准备独立于启动与推理。
+
+在「连接与凭证」登记 `edge-tts` 的 `http://127.0.0.1:8018/v1` 和 `local-ltx` 的 `http://127.0.0.1:7930/v1`，分别使用私有 `runtimes/edge`、`runtimes/ltx` 下 `service-token` 文件中的服务令牌。发布部署后在「项目访问」授权。LTX 重启后继续从相同的 `jobs` 目录查询原操作 ID。接管旧 LTX 服务前先暂停提交，等待任务进入终态并保留原回执及成片。调用方若需访问已有标准 `/v1/videos` 资源，请保留原连接和上游 origin。修改上游地址后重新发现并启用部署，再以项目密钥验证。
+
+## 管理 Greyscope 文本检测
+
+```sh
+npm run greyscope -- setup
+npm run greyscope -- start
+npm run greyscope -- health
+```
+
+安装发行包后用 `model-dock greyscope`。`setup` 使用 `uv` 安装依赖，并按固定清单校验 `greyscope-v2-mlx-q4` 的权重。已有权重时可用 `setup --source` 指定目录。Apple Silicon 运行时离线启动，模型预热后才监听。用 `stop` 或 `restart` 管理用户级 LaunchAgent。
+
+在「连接与凭证」登记 `greyscope` 协议和地址 `http://127.0.0.1:7746/v1`，凭据使用私有 `runtimes/greyscope/service-token` 文件中的服务令牌。发布部署后为对应项目授权。项目可用 `GET /v1/services/<编码后的部署 ID>/health` 查询状态，或向 `POST /v1/services/<编码后的部署 ID>/detect` 提交包含 `engine` 和 `text` 的 JSON。网关只记录调用元数据，稿件和检测报告由应用管理。
+
+## 管理 Ollama 向量服务
+
+使用已安装的 Ollama 可执行文件和准备好的本机模型目录。与桌面 Ollama 同时运行时，为受管实例准备独立目录。复用现有模型时复制对应标签的清单和引用的数据文件。注册摘要取目标目录中本地标签清单的 SHA-256，离线实例的 `/api/tags` 返回该值。原生维度可在 `/api/show` 的 `embedding_length` 中查看。
+
+```sh
+npm run ollama -- register --executable "$OLLAMA_EXECUTABLE" --models-root "$OLLAMA_MODEL_STORE" \
+  --model qwen3-embedding:0.6b --digest "$MODEL_DIGEST" --dimensions 1024
+npm run ollama -- start
+npm run ollama -- health
+```
+
+安装发行包后用 `model-dock ollama` 执行同样的子命令。用 `stop` 和 `restart` 管理 macOS 用户级 LaunchAgent。它在 `127.0.0.1:7734` 离线运行 Ollama，健康检查核对监听进程、模型摘要和原生维度。
+
+在「连接与凭证」登记 `embedding` 协议和地址 `http://127.0.0.1:7734/v1`，上游模型使用 `qwen3-embedding:0.6b`。迁移已有部署时，在原连接上更新上游地址，重新发现并启用原部署。沿用应用配置中的模型、维度设置和端点标识，并用实际查询核对旧索引的召回结果。
 
 ## 开发与打包
 

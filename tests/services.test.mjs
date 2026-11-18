@@ -33,6 +33,24 @@ async function mediaFixture(t, handle) {
   return { calls, origin: `http://127.0.0.1:${server.address().port}` };
 }
 
+test('scoped MiniMax multimodal Responses use the saved key and native payload', async t => {
+  const upstream = await mediaFixture(t, ({ path, method }) => path === '/v1/responses' && method === 'POST' && {
+    value: { id: 'test_response', output: [] }
+  });
+  const app = await setup(t);
+  const deployment = await publishService(app, `${upstream.origin}/v1`, 'minimax-chat', { apiKey: 'minimax-fixture-key' });
+  const { data: project } = await app.mutate('/admin/keys', 'POST', { name: 'MiniMax project', models: [deployment] });
+  const unrelated = await publishService(app, `${upstream.origin}/v1`, 'deepseek');
+  const { data: other } = await app.mutate('/admin/keys', 'POST', { name: 'Unrelated project', models: [unrelated] });
+  const path = `/v1/services/${encodeURIComponent(deployment)}/responses`;
+  const input = { model: 'MiniMax-M3', input: [{ role: 'user', content: 'Fixture' }], stream: false };
+  assert.equal((await app.request(path, 'POST', input, other.token)).status, 403);
+  assert.deepEqual((await app.request(path, 'POST', input, project.token)).data, { id: 'test_response', output: [] });
+  assert.equal(upstream.calls.length, 1);
+  assert.equal(upstream.calls[0].headers.authorization, 'Bearer minimax-fixture-key');
+  assert.deepEqual(JSON.parse(upstream.calls[0].body.toString()), input);
+});
+
 test('API credentials group equal keys on the same origin and rotate linked sources atomically', async t => {
   const app = await setup(t);
   const origin = 'https://provider.example';

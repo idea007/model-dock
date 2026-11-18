@@ -1,0 +1,20 @@
+{
+  "engine": "greyscope-v2-mlx-q4",
+  "modelId": "yaoandy107/greyscope-v2-qwen3.5-4b-mlx-4bit",
+  "revision": "59b6ec7a24cae161c4cbc85e594c586541d8f710",
+  "license": "Apache-2.0",
+  "sourceCode": "https://github.com/yaoandy107/greyscope",
+  "sourceRevision": "02df6e3c6cfb56039b95ac71167337f7de1c0464",
+  "sourceLicense": "MIT",
+  "files": {
+    "README.md": "28e80b020f68179889d690adcb3800af1ce929282acf3b9358ab899032de8a96",
+    "calibration.json": "7cdd40c8f7cd1e15fe90cfcccf8d9ef233cf60fec065d6f9c3fb77610c0f809e",
+    "config.json": "958a06c16b28f52b5367855bfb3825e8ba40e30662ae7d733d6b5acd7d1e1783",
+    "greyscope_mlx_export.json": "7254a988ed076c6b4e604fcce486d19870a69a3e0fc6d087350c1c69937107f9",
+    "mlx_model.py": "f53afc589ec9df9bbd8d7daf7f32267b8da15839eca5459a2e54ecce82d50fef",
+    "model.safetensors": "2573ee84f7db2c889cd8c94a542cbe4fc63ab7e4d70d26efb2aa48fb045b8b36",
+    "model.safetensors.index.json": "c10b76d5bca98c4449ad464c2f77b33648443bd9a4bfe945fd5008a27a394c1a",
+    "tokenizer.json": "4ee378335b781c530a9c70c965ff5c81b55c56970781e1d477abca5c6d270b2b",
+    "tokenizer_config.json": "ce96f3327ea088f844868203f1f4de2e1fb41b48e37220ef22bce7d7f3f57f90"
+  }
+}

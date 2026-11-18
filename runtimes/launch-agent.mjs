@@ -1,9 +1,33 @@
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+
+export function stageSources(root, sourceDirectory, files) {
+  const sources = files.map(name => [name, readFileSync(path.join(sourceDirectory, name))]);
+  const hash = createHash('sha256');
+  for (const [name, source] of sources) hash.update(name).update('\0').update(source).update('\0');
+  // A macOS login job may lack access to a checkout in a protected directory.
+  const directory = path.join(root, 'code');
+  const revision = path.join(directory, hash.digest('hex'));
+  if (existsSync(revision)) return revision;
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const staging = mkdtempSync(path.join(directory, '.setup-'));
+  try {
+    for (const [name, source] of sources) {
+      const target = path.join(staging, name);
+      mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      writeFileSync(target, source, { mode: 0o600 });
+    }
+    try { renameSync(staging, revision); }
+    catch (error) { if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) throw error; }
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+  return revision;
+}
 
 function launchctl(args) {
   return spawnSync('/bin/launchctl', args, { encoding: 'utf8', timeout: 40_000 });
@@ -28,8 +52,8 @@ const xml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt
 const plistString = value => '<string>' + xml(value) + '</string>';
 
 function writeLaunchAgent(settings, args, env) {
-  const errors = path.join(settings.root, settings.logName);
-  writeFileSync(errors, '', { flag: 'a', mode: 0o600 });
+  const errors = settings.logName ? path.join(settings.root, settings.logName) : '/dev/null';
+  if (settings.logName) writeFileSync(errors, '', { flag: 'a', mode: 0o600 });
   const environment = Object.entries(env || {}).map(([key, value]) => `<key>${xml(key)}</key>${plistString(value)}`);
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
