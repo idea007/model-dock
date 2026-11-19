@@ -26,7 +26,9 @@ const validTurn = row => isHash(row?.requestHash) && isNativeId(row.threadId) &&
 
 export class CodexSessions {
   #active = new Set();
+  #unwritten = new Set();
   #directoryReady;
+  #indexQueue = Promise.resolve();
 
   constructor(directory) { this.directory = path.join(directory, 'codex-sessions'); }
 
@@ -53,16 +55,23 @@ export class CodexSessions {
     }
   }
   async #makeRoom() {
+    const protectedIds = new Set(this.#active);
+    const reservations = [...this.#unwritten];
     const files = (await fs.readdir(this.directory)).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
     const rows = [];
     for (const file of files) {
       const id = file.slice(0, -5), row = await this.read(id);
       if (row) rows.push({ id, row });
     }
+    const indexedIds = new Set(rows.map(({ id }) => id));
     let retained = rows.length;
+    for (const id of reservations) {
+      // A reserved record may have been written after readdir, then released.
+      if (!indexedIds.has(id) && (this.#unwritten.has(id) || await this.read(id))) retained++;
+    }
     const cutoff = Date.now() - 30 * 86400_000;
     for (const { id, row } of rows.sort((a, b) => a.row.updatedAt - b.row.updatedAt)) {
-      if (this.#active.has(id) || row.status === 'pending' || (retained < 512 && row.updatedAt >= cutoff)) continue;
+      if (protectedIds.has(id) || this.#active.has(id) || row.status === 'pending' || (retained < 512 && row.updatedAt >= cutoff)) continue;
       await fs.unlink(this.#file(id));
       retained--;
     }
@@ -75,13 +84,25 @@ export class CodexSessions {
     try {
       this.#directoryReady ||= this.#open().catch(error => { this.#directoryReady = null; throw error; });
       await this.#directoryReady;
-      const row = await this.read(id);
-      if (!row) await this.#makeRoom();
+      const indexed = this.#indexQueue.then(async () => {
+        const row = await this.read(id);
+        if (!row) {
+          await this.#makeRoom();
+          this.#unwritten.add(id);
+        }
+        return row;
+      });
+      this.#indexQueue = indexed.catch(() => {});
+      const row = await indexed;
       return { row, write: async record => {
         const next = { ...record, version: 1, updatedAt: Date.now() };
         try { await writePrivateJson(this.#file(id), next); } catch { throw damaged(); }
+        this.#unwritten.delete(id);
         return next;
-      }, release: () => this.#active.delete(id) };
+      }, release: () => {
+        this.#unwritten.delete(id);
+        this.#active.delete(id);
+      } };
     } catch (error) { this.#active.delete(id); throw error; }
   }
 }

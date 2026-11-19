@@ -7,7 +7,7 @@ import { ProviderUsageTrace, serviceUsageEndpoint } from './provider-usage.mjs';
 import { observeServiceUsage, serviceAuditInput } from './service-usage.mjs';
 import { budgetQuote, normalizeBudget, ProjectBudgets } from './budgets.mjs';
 import { activeModel, cooldownUntil, modelMetadata, normalizeModelPool, poolMembers, poolMetadata, poolSupports } from './model-pools.mjs';
-import { CodexRequestQueue, connectionBusy } from './codex-request-queue.mjs';
+import { CodexRequestQueue, MAX_CODEX_CONCURRENCY, connectionBusy } from './codex-request-queue.mjs';
 import { CodexImageOperations } from './codex-image-operations.mjs';
 import { CodexSessions, validateCodexSession, scopeCodexSession } from './codex-sessions.mjs';
 import { ServiceOwnership } from './service-ownership.mjs';
@@ -46,11 +46,12 @@ export function normalizeConnection(input, previous) {
   exact(input, ['revision', 'name', 'type', 'baseUrl', 'apiKey', 'enabled', 'maxConcurrency', 'timeoutSeconds', 'service', 'credentialId', 'upstreamModel', 'serviceModels']);
   const type = previous?.type || input.type;
   if (!['openai', 'ollama', 'codex', 'mflux', 'service'].includes(type) || previous && input.type !== undefined && input.type !== previous.type) throw new GatewayError('Invalid provider type.');
-  const concurrencyLimit = type === 'codex' ? 1 : type === 'mflux' ? 4 : 16;
+  const concurrencyLimit = type === 'codex' ? MAX_CODEX_CONCURRENCY : type === 'mflux' ? 4 : 16;
+  const defaultConcurrency = { codex: 1, mflux: 4 }[type] ?? 2;
   const connection = { ...previous, id: previous?.id || newId('conn'), type,
     name: input.name === undefined && previous ? previous.name : string(input.name, 'connection name', 100),
     enabled: input.enabled ?? previous?.enabled ?? true,
-    maxConcurrency: input.maxConcurrency ?? previous?.maxConcurrency ?? (concurrencyLimit < 16 ? concurrencyLimit : 2),
+    maxConcurrency: input.maxConcurrency ?? previous?.maxConcurrency ?? defaultConcurrency,
     timeoutSeconds: input.timeoutSeconds ?? previous?.timeoutSeconds ?? 600,
     status: 'unknown', checkedAt: null, errorCode: null };
   if (type === 'service') {
@@ -105,7 +106,7 @@ export class Gateway {
     this.budgets = new ProjectBudgets(store.directory, this.clock);
     this.cooldowns = new Map();
     this.poolCursors = new Map();
-    this.codexQueue = options.codexQueueWaitMs ? new CodexRequestQueue(options.codexQueueWaitMs) : null;
+    this.codexQueue = new CodexRequestQueue(options.codexQueueWaitMs ?? 0, options.codexMaxConcurrency);
     this.imageOperations = new CodexImageOperations(options.imageStores || new Map(), this.providers.codex);
     this.serviceOwnership = new ServiceOwnership(store.directory);
   }
@@ -200,7 +201,9 @@ export class Gateway {
         })) };
       }),
       active: [...this.active.values()].map(({ controller, ...row }) => row),
-      codexWaiting: this.codexQueue?.waitingCount ?? 0,
+      codexWaiting: this.codexQueue.waitingCount,
+      codexMaxConcurrency: this.codexQueue.maxActive,
+      codexQueueWaitMs: this.codexQueue.waitMs,
       requests: this.history,
       providers: [
         { id: 'openai', label: 'OpenAI-compatible API', capabilities: 'Provider-defined', parameters: 'Chat Completions subset; see compatibility documentation.' },
@@ -307,7 +310,7 @@ export class Gateway {
     });
     this.cooldowns.delete(id);
     const removed = new GatewayError('Connection removed.', 409, 'connection_removed');
-    this.codexQueue?.cancelMatching(row => row.connectionId === id, removed);
+    this.codexQueue.cancelMatching(row => row.connectionId === id, removed);
     for (const row of this.active.values()) if (row.connectionId === id) row.controller.abort(removed);
     return result;
   }
@@ -440,7 +443,7 @@ export class Gateway {
     await this.store.mutate(revision, state => { if (!state.keys.some(item => item.id === id)) missing('Key'); state.keys = state.keys.filter(item => item.id !== id); });
     this.projectWindows.delete(id);
     const revoked = new GatewayError('Access key revoked.', 401, 'key_revoked');
-    this.codexQueue?.cancelMatching(row => row.principalId === id, revoked);
+    this.codexQueue.cancelMatching(row => row.principalId === id, revoked);
     for (const row of this.active.values()) if (row.principalId === id) row.controller.abort(revoked);
   }
   admitProjectRequest(principal) {
@@ -485,8 +488,7 @@ export class Gateway {
     row.errorCode = error instanceof GatewayError ? error.code : 'response_failed';
   }
   #concurrent(connection) {
-    return [...this.active.values()].filter(row => row.connectionId === connection.id
-      || connection.type === 'codex' && row.provider === 'codex').length;
+    return [...this.active.values()].filter(row => row.connectionId === connection.id).length;
   }
   #cooldown(connection) {
     const until = this.cooldowns.get(connection.id) || 0;
@@ -586,8 +588,9 @@ export class Gateway {
   async #admitRequest(name, principal, context, prepare) {
     let selection = this.#resolveModel(name, principal, prepare);
     let release;
-    if (selection.connection.type === 'codex' && this.codexQueue) {
-      release = await this.codexQueue.acquire(context.id, context.admissionSignal || context.signal, principal.id, selection.connection.id);
+    if (selection.connection.type === 'codex') {
+      release = await this.codexQueue.acquire(context.id, context.admissionSignal || context.signal,
+        principal.id, selection.connection.id, selection.connection.maxConcurrency);
     }
     try {
       if (release && selection.revision !== this.store.read().revision) {
@@ -857,7 +860,7 @@ export class Gateway {
   }
   async close() {
     const shuttingDown = new GatewayError('Gateway is shutting down.', 503, 'shutting_down');
-    this.codexQueue?.cancelMatching(() => true, shuttingDown);
+    this.codexQueue.cancelMatching(() => true, shuttingDown);
     for (const row of this.active.values()) row.controller.abort(shuttingDown);
     await this.imageOperations.close();
     await Promise.allSettled(Object.values(this.providers).map(provider => provider.close?.()));

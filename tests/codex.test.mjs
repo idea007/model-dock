@@ -159,6 +159,52 @@ test('Codex waiters are bounded and time out before taking a slot', async () => 
   assert.equal(typeof queue.acquire('fresh', signal, 'next', 'codex'), 'function');
 });
 
+test('two Codex requests run in parallel and a third waits for a released slot', async t => {
+  const app = await setup(t, { codexMaxConcurrency: 2, codexQueueWaitMs: 4000 });
+  const connection = await app.connection('codex'), model = `${connection}/codex-fixture`;
+  assert.equal((await app.mutate(`/admin/connections/${connection}`, 'PATCH', { maxConcurrency: 2 })).status, 200);
+  await app.enable(model);
+  const startSlow = () => {
+    const controller = new AbortController();
+    t.after(() => controller.abort());
+    const request = fetch(`${app.origin}${chatEndpoint}`, {
+      method: 'POST', signal: controller.signal,
+      headers: { authorization: `Bearer ${app.store.adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: 'slow' }] })
+    });
+    const stopped = assert.rejects(request, { name: 'AbortError' });
+    stopped.catch(() => {});
+    return { controller, stopped };
+  };
+  const first = startSlow();
+  await until(() => app.gateway.active.size === 1);
+  const second = startSlow();
+  await until(() => app.gateway.active.size === 2);
+  const third = app.request(chatEndpoint, 'POST', { model, messages: [{ role: 'user', content: 'hello' }] });
+  await until(() => app.gateway.snapshot().codexWaiting === 1);
+  assert.equal(app.gateway.active.size, 2);
+  first.controller.abort();
+  await first.stopped;
+  assert.equal((await third).status, 200);
+  assert.equal(app.gateway.snapshot().codexWaiting, 0);
+  assert.equal(app.gateway.active.size, 1);
+  second.controller.abort();
+  await second.stopped;
+  await until(() => app.gateway.active.size === 0);
+});
+
+test('an already full Codex connection queues even if the gateway has a spare slot', async () => {
+  const queue = new CodexRequestQueue(4000, 2);
+  const signal = new AbortController().signal;
+  const release = queue.acquire('active', signal, 'test', 'same-connection', 1);
+  const waiting = queue.acquire('queued', signal, 'test', 'same-connection', 1);
+  assert.equal(queue.waitingCount, 1);
+  release();
+  const releaseNext = await waiting;
+  assert.equal(queue.waitingCount, 0);
+  releaseNext();
+});
+
 test('Codex validates structured text before opening the response stream', async t => {
   const app = await setup(t), id = await app.connection('codex'), model = `${id}/codex-fixture`;
   await app.enable(model);

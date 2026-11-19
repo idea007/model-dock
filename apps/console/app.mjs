@@ -43,7 +43,7 @@ const providerTypes = {
   openai: { name: 'common.modelApi', icon: 'cloud', description: 'console.modelApiProviderHelp', addLabel: 'console.addApiCredential' },
   local: { name: 'console.localServices', icon: 'computer', description: 'console.localServicesHelp', addLabel: 'console.addLocalServiceConnection' },
   ollama: { name: 'Ollama', icon: 'computer', description: 'console.ollamaProviderHelp', addLabel: 'console.addOllama', defaultName: 'common.localOllama', baseUrl: 'http://127.0.0.1:11434', baseHelp: 'console.ollamaBaseUrlHelp' },
-  codex: { name: 'Codex', icon: 'terminal', description: 'console.codexProviderHelp', addLabel: 'console.addCodex', defaultName: 'common.localCodex', baseUrl: '', concurrencyLimit: 1 },
+  codex: { name: 'Codex', icon: 'terminal', description: 'console.codexProviderHelp', addLabel: 'console.addCodex', defaultName: 'common.localCodex', baseUrl: '', concurrencyLimit: 16 },
   mflux: { name: 'MFLUX', concurrencyLimit: 4 },
   service: { name: 'console.providerService' }
 };
@@ -1448,7 +1448,7 @@ function localConnectionDialog(typeId, existing) {
   showDialog(existing ? t('console.editConnection') : t('console.addConnectionTitle', type.name), typeId === 'codex' ? t('console.codexConnectionHelp') : t('console.connectionDiscoveryHelp'), `
     <label>${t('console.connectionName')}<input name="name" value="${escape(existing?.name || type.defaultName)}" required maxlength="100"></label>
     ${typeId !== 'codex' ? `<label>Base URL<input type="url" name="baseUrl" value="${escape(existing?.baseUrl || type.baseUrl)}" required><small>${t(type.baseHelp)}</small></label><label>API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="${t(existing?.hasKey ? 'console.keepExistingKey' : 'console.ollamaKeyHelp')}">${existing?.hasKey ? `<small>${t('console.removeKeyHelp')}</small>` : ''}</label>${existing?.hasKey ? `<label class="checkbox-label"><input type="checkbox" name="clearKey">${t('console.removeSavedKey')}</label>` : ''}` : `<div class="info-box">${t('console.codexIsolationHelp')}</div>`}
-    ${connectionLimits(existing, type.concurrencyLimit, type.concurrencyLimit)}`, t('console.saveConnection'), async form => {
+    ${connectionLimits(existing, type.concurrencyLimit, typeId === 'codex' ? 1 : type.concurrencyLimit)}`, t('console.saveConnection'), async form => {
     const input = { ...connectionFields(form), type: typeId };
     if (typeId !== 'codex') {
       input.baseUrl = form.get('baseUrl');

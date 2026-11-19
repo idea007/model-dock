@@ -24,14 +24,39 @@ function encodeImage(result) {
   return { b64_json: bytes.toString('base64'), ...info };
 }
 
+// Interruption may have to stop an app-server. Each live request owns its client
+// until it ends, so that cleanup cannot stop another request's turn.
+function createClientPool(options) {
+  const clients = new Set(), idle = [];
+  let closed = false;
+  const acquire = () => {
+    if (closed) throw new GatewayError('Gateway is shutting down.', 503, 'shutting_down');
+    const client = idle.pop() || new CodexClient(options);
+    clients.add(client);
+    return { client, release: () => { if (!closed) idle.push(client); } };
+  };
+  return {
+    acquire,
+    async use(run) {
+      const { client, release } = acquire();
+      try { return await run(client); } finally { release(); }
+    },
+    close() {
+      closed = true;
+      idle.length = 0;
+      return Promise.allSettled([...clients].map(client => client.stop()));
+    }
+  };
+}
+
 export function createCodexProvider(options = {}) {
-  const client = new CodexClient(options);
-  const imageClient = new CodexClient({ ...options, imageGeneration: true });
+  const textClients = createClientPool(options);
+  const imageClients = createClientPool({ ...options, imageGeneration: true });
   return {
     supportsCodexSessions: true,
     tracesUsage: true,
     async discover(connection, { signal }) {
-      const models = await client.models(signal);
+      const models = await textClients.use(client => client.models(signal));
       const catalog = models.filter(model => model.id !== imageModelId).map(model => ({
         nativeId: model.id, name: model.displayName || model.id,
         capabilities: { text: true, tools: true, structured: true, image_input: Array.isArray(model.inputModalities) ? model.inputModalities.includes('image') : null },
@@ -41,7 +66,7 @@ export function createCodexProvider(options = {}) {
       }));
       if (selectImageModel(models)) {
         const probe = AbortSignal.any([signal, AbortSignal.timeout(6000)]);
-        const supported = await imageClient.supportsImageGeneration(probe).catch(() => false);
+        const supported = await imageClients.use(client => client.supportsImageGeneration(probe)).catch(() => false);
         if (supported) {
           catalog.push({
             nativeId: imageModelId, name: imageModelId, capability: 'image_generation',
@@ -54,24 +79,26 @@ export function createCodexProvider(options = {}) {
       return catalog;
     },
     async generateImage(_connection, request, { signal, onIdentity, onImage, trace }) {
-      const model = selectImageModel(await imageClient.models(signal));
-      if (!model || !await imageClient.supportsImageGeneration(signal)) {
-        throw new GatewayError('Native image generation is unavailable in the local Codex runtime.', 503, 'codex_image_unavailable');
-      }
-      let encoded;
-      const { image, usage } = await imageClient.runImage(model.id, request, signal, {
-        onIdentity, trace, onImage: onImage && ((result, usage) => {
-          encoded = encodeImage(result);
-          return onImage({ ...encoded, usage });
-        })
+      return imageClients.use(async client => {
+        const model = selectImageModel(await client.models(signal));
+        if (!model || !await client.supportsImageGeneration(signal)) {
+          throw new GatewayError('Native image generation is unavailable in the local Codex runtime.', 503, 'codex_image_unavailable');
+        }
+        let encoded;
+        const { image, usage } = await client.runImage(model.id, request, signal, {
+          onIdentity, trace, onImage: onImage && ((result, usage) => {
+            encoded = encodeImage(result);
+            return onImage({ ...encoded, usage });
+          })
+        });
+        const result = encoded || encodeImage(image);
+        trace?.output(result);
+        trace?.stopReason('stop');
+        return { ...result, usage };
       });
-      const result = encoded || encodeImage(image);
-      trace?.output(result);
-      trace?.stopReason('stop');
-      return { ...result, usage };
     },
     async recoverImage(identity, signal) {
-      const result = await imageClient.recoverImage(identity, signal);
+      const result = await imageClients.use(client => client.recoverImage(identity, signal));
       return result ? encodeImage(result) : null;
     },
     async *generate(connection, request, { signal, model, session, trace }) {
@@ -86,6 +113,7 @@ export function createCodexProvider(options = {}) {
       const format = request.response_format?.type;
       const structured = ['json_object', 'json_schema'].includes(format);
       let structuredText = '';
+      const { client, release } = textClients.acquire();
       const task = client.run(request, { signal: turnSignal, session, trace, onDelta(content) {
         trace?.delta({ content });
         if (structured) structuredText += content;
@@ -116,8 +144,9 @@ export function createCodexProvider(options = {}) {
           controller.abort();
           await task;
         }
+        release();
       }
     },
-    close: () => Promise.allSettled([client.stop(), imageClient.stop()])
+    close: () => Promise.all([textClients.close(), imageClients.close()])
   };
 }

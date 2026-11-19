@@ -2,17 +2,18 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { realpathSync } from 'node:fs';
-import { parseEnv } from 'node:util';
+import { parseEnv, promisify } from 'node:util';
 import { startGateway } from './server.mjs';
 import { VERSION } from '../../packages/protocol/index.mjs';
+import { MAX_CODEX_CONCURRENCY } from '../../packages/core/codex-request-queue.mjs';
 
 const configRoot = new URL('../../', import.meta.url);
 const fileSettings = [
-  'MODEL_DOCK_PORT', 'MODEL_DOCK_HOME', 'MODEL_DOCK_CODEX_QUEUE_WAIT_MS',
+  'MODEL_DOCK_PORT', 'MODEL_DOCK_HOME', 'MODEL_DOCK_CODEX_QUEUE_WAIT_MS', 'MODEL_DOCK_CODEX_MAX_CONCURRENCY', 'MODEL_DOCK_USAGE_DEBUG',
   'MODEL_DOCK_MFLUX_PORT', 'MODEL_DOCK_MFLUX_RUNTIME_DIR', 'MODEL_DOCK_MFLUX_PYTHON',
   'MODEL_DOCK_TTS_PORT', 'MODEL_DOCK_ASR_PORT', 'MODEL_DOCK_TTS_MODEL',
   'MODEL_DOCK_MLX_AUDIO_RUNTIME_DIR', 'MODEL_DOCK_MLX_AUDIO_PYTHON',
@@ -38,6 +39,16 @@ export async function loadGatewayEnvironment(env = process.env) {
 
 export function dataDirectory() {
   return process.env.MODEL_DOCK_HOME || path.join(os.homedir(), '.model-dock');
+}
+
+async function ownsMacListener(port) {
+  if (process.platform !== 'darwin') return false;
+  try {
+    const { pid } = JSON.parse(await fs.readFile(path.join(dataDirectory(), 'server.lock'), 'utf8'));
+    if (!Number.isSafeInteger(pid) || pid < 1) return false;
+    const { stdout } = await promisify(execFile)('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN', '-Fn']);
+    return stdout.split('\n').includes(`n127.0.0.1:${port}`);
+  } catch { return false; }
 }
 
 function requestConsoleLink(origin, token) {
@@ -112,11 +123,12 @@ export async function main(args = process.argv.slice(2)) {
     return;
   }
   if (!['serve', 'open'].includes(command)) throw new Error('Unknown command. Run model-dock --help.');
-  let port = Number(process.env.MODEL_DOCK_PORT || 4317), open = true, print = false;
+  let port = Number(process.env.MODEL_DOCK_PORT || 4317), open = true, print = false, reuse = false;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--port') port = Number(args[++i]);
     else if (command === 'serve' && args[i] === '--open') open = true;
     else if (command === 'serve' && args[i] === '--no-open') open = false;
+    else if (command === 'serve' && args[i] === '--reuse') reuse = true;
     else if (command === 'open' && args[i] === '--print') print = true;
     else throw new Error(`Unknown argument: ${args[i]}`);
   }
@@ -128,11 +140,20 @@ export async function main(args = process.argv.slice(2)) {
     else openConsole(url);
     return;
   }
+  if (reuse && await ownsMacListener(port)) {
+    const url = await fs.readFile(path.join(dataDirectory(), 'admin.token'), 'utf8')
+      .then(token => requestConsoleLink(`http://127.0.0.1:${port}`, token.trim())).catch(() => null);
+    if (url) { if (open) openConsole(url); return; }
+  }
   const codexQueueWaitMs = Number(process.env.MODEL_DOCK_CODEX_QUEUE_WAIT_MS || 0);
   if (!Number.isInteger(codexQueueWaitMs) || codexQueueWaitMs < 0 || codexQueueWaitMs > 120_000) {
     throw new Error('MODEL_DOCK_CODEX_QUEUE_WAIT_MS must be an integer between 0 and 120000.');
   }
-  const app = await startGateway({ directory: dataDirectory(), port, codexQueueWaitMs });
+  const codexMaxConcurrency = Number(process.env.MODEL_DOCK_CODEX_MAX_CONCURRENCY || 1);
+  if (!Number.isInteger(codexMaxConcurrency) || codexMaxConcurrency < 1 || codexMaxConcurrency > MAX_CODEX_CONCURRENCY) {
+    throw new Error(`MODEL_DOCK_CODEX_MAX_CONCURRENCY must be an integer from 1 to ${MAX_CODEX_CONCURRENCY}.`);
+  }
+  const app = await startGateway({ directory: dataDirectory(), port, codexQueueWaitMs, codexMaxConcurrency });
   const consoleStatus = open
     ? 'Opening the console in your default browser with automatic sign-in.'
     : `Open the console later with: model-dock open --port ${port} (or npm run console -- --port ${port})`;

@@ -328,7 +328,7 @@ node -e '
 
 The response contains one image. Decode `data[0].b64_json` to get the file, up to 30 MiB before Base64 encoding. `output_format` is `png`, `jpeg` or `webp`, and `data[0].width` and `data[0].height` give its actual pixel dimensions. Check the result for its aspect ratio and transparency. For another edit, add `` `data:image/${output_format};base64,${data[0].b64_json}` `` to `reference_images`. The console playground's **Continue editing** button adds the previous result as the first reference.
 
-Text and image calls share the single Codex request slot. The same connection timeout, cancellation and key revocation rules apply. To limit the application to one submission, set `maxRetries: 0` in the JavaScript SDK or `max_retries=0` in Python. After losing the response, the result of the first submission may be unknown.
+Text and image calls share the gateway's Codex capacity and the limit of their connection. The same connection timeout, cancellation and key revocation rules apply. To limit the application to one submission, set `maxRetries: 0` in the JavaScript SDK or `max_retries=0` in Python. After losing the response, the result of the first submission may be unknown.
 
 #### MFLUX
 
@@ -336,7 +336,7 @@ Start the local MFLUX runtime, then add an MFLUX connection with its loopback UR
 
 The current runtime publishes `flux2-klein-4b` with up to four reference images and `z-image-turbo` for text prompts. MFLUX accepts `1:1`, `16:9` and `4:5`, defaulting to `1024x1024`. It returns a synchronous PNG of at most 16 MiB. The encoded request is at most 15 MiB, with up to 10 MiB per decoded reference. The runtime serializes inference and accepts up to four in-flight requests, including the running request.
 
-For multiple local projects, set `MODEL_DOCK_CODEX_QUEUE_WAIT_MS` when starting Model Dock to wait for the shared Codex slot. It defaults to `0` and accepts up to `120000` milliseconds. With waiting enabled, the gateway admits up to eight waiting Codex requests in arrival order. Queue time does not start the provider's execution timeout. A full queue or an expired wait returns `429 connection_busy` before submission. Disconnects and key revocation remove waiting requests. The authenticated admin state reports the current count as `codexWaiting`.
+Set `MODEL_DOCK_CODEX_MAX_CONCURRENCY` when starting Model Dock to configure the shared Codex capacity. The default is `1` and the range is `1` to `16`. A Codex connection also has its own concurrency limit, which defaults to `1`. To run two requests on one connection, both limits need to allow two. To wait when either limit is full, set `MODEL_DOCK_CODEX_QUEUE_WAIT_MS` to a positive integer up to `120000`. The default `0` disables waiting. The queue holds up to eight requests and grants slots in arrival order. The provider timeout starts when the request gets a slot. A full queue or an expired wait returns `429 connection_busy` before submission. Disconnects and key revocation remove waiting requests. The authenticated admin state exposes `codexMaxConcurrency`, `codexQueueWaitMs`, and the current `codexWaiting` count.
 
 ### Codex session and operation extensions
 
